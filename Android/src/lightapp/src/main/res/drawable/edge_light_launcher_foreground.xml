@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/edge_light_launcher_art"
+    android:antialias="true"
+    android:filter="true"
+    android:gravity="fill" />
