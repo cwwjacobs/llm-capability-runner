@@ -25,6 +25,7 @@ plugins {
 }
 
 allprojects {
+    layout.buildDirectory.set(file("C:/temp/edge-lite-build/${project.name}"))
     tasks.withType<JavaCompile>().configureEach {
         val javaToolchains = project.extensions.getByType<JavaToolchainService>()
         javaCompiler.set(javaToolchains.compilerFor {
