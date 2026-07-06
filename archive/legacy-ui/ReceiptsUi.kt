@@ -1,4 +1,4 @@
-package com.terminus.edge.light
+package archived.legacy.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column

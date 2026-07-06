@@ -2,6 +2,7 @@ package com.terminus.edge.light.image
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -46,6 +47,24 @@ object ImageAttachmentLoader {
     }
     return ImageAttachment(
       displayName = queryDisplayName(context, uri) ?: "Attached image",
+      bitmap = bitmap,
+      pngBytes = bytes,
+      width = bitmap.width,
+      height = bitmap.height,
+      sha256 = TraceIntegrity.sha256(bytes),
+    )
+  }
+
+  fun load(file: java.io.File, id: String, displayName: String): ImageAttachment {
+    require(file.isFile) { "The saved image is unavailable." }
+    val bytes = file.readBytes()
+    val bitmap =
+      requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) {
+        "The saved image could not be decoded."
+      }
+    return ImageAttachment(
+      id = id,
+      displayName = displayName,
       bitmap = bitmap,
       pngBytes = bytes,
       width = bitmap.width,

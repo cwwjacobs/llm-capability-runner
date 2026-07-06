@@ -20,6 +20,11 @@ android {
       "LITERT_LM_VERSION",
       "\"${libs.versions.litertlm.get()}\"",
     )
+    buildConfigField(
+      "String",
+      "GGUF_RUNTIME_VERSION",
+      "\"cb295bf59663cd3577389315636772f4060bd1f5\"",
+    )
 
     ndk { abiFilters += "arm64-v8a" }
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -78,11 +83,13 @@ dependencies {
   implementation(libs.material.icon.extended)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.litertlm)
+  implementation(project(":ggufruntime"))
   implementation(libs.androidx.room.runtime)
   implementation(libs.androidx.room.ktx)
   ksp(libs.androidx.room.compiler)
 
   testImplementation(libs.junit)
+  testImplementation(libs.json)
   debugImplementation(libs.androidx.ui.tooling)
   implementation(libs.openid.appauth)
   implementation("androidx.security:security-crypto:1.1.0-alpha06")

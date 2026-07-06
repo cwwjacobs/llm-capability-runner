@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,26 +32,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.AddCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,7 +54,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,23 +62,16 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import com.terminus.edge.light.trace.ReviewDecision
 import com.terminus.edge.light.trace.ReviewRubric
 import com.terminus.edge.light.image.ImageAttachment
-import android.app.Activity
-import android.content.Intent
-import android.media.projection.MediaProjectionManager
-import android.provider.Settings
-import android.os.Environment
-import android.os.Build
 import com.terminus.edge.light.model.ModelDownloaderDialog
-import com.terminus.edge.light.persona.GateWarningDialog
-import com.terminus.edge.light.model.ModelDescriptor
-import com.terminus.edge.light.memory.MemoryDeckDialog
-import com.terminus.edge.light.persona.PersonaSelector
-import com.terminus.edge.light.agent.SwarmMonitorUi
+import com.terminus.edge.light.workflow.WorkflowDraftStore
 import java.io.File
 import java.text.DecimalFormat
 import kotlinx.coroutines.launch
@@ -112,19 +97,26 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun EdgeLightScreen(controller: EdgeController) {
   val scope = rememberCoroutineScope()
+  val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+  val notesStore = remember { HumanNotesStore(appContext) }
+  val workflowStore = remember { WorkflowDraftStore(appContext) }
+  var notes by remember { mutableStateOf(notesStore.activeNotes()) }
+  var workflows by remember { mutableStateOf(workflowStore.activeDrafts()) }
   var prompt by remember { mutableStateOf("") }
   var pendingReview by remember { mutableStateOf<Pair<UiMessage, ReviewDecision>?>(null) }
   var pendingExport by remember { mutableStateOf<ExportMode?>(null) }
   var showDeleteConfirmation by remember { mutableStateOf(false) }
   var showSkillLibrary by remember { mutableStateOf(false) }
   var showAddSkill by remember { mutableStateOf(false) }
-  var showReceipts by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
   var showContextManager by remember { mutableStateOf(false) }
-  var showMemoryDeck by remember { mutableStateOf(false) }
-  var showStorageUi by remember { mutableStateOf(false) }
+  var showNotes by remember { mutableStateOf(false) }
+  var showWorkflows by remember { mutableStateOf(false) }
+  var showHuggingFaceAccess by remember { mutableStateOf(false) }
   var showModelDownloader by remember { mutableStateOf(false) }
-  var showSwarmMonitor by remember { mutableStateOf(false) }
+  var showDeviceModels by remember { mutableStateOf(false) }
+  var showApiProviders by remember { mutableStateOf(false) }
+  var destination by remember { mutableStateOf(WorkspaceDestination.CHAT) }
 
   val importModel =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -156,277 +148,121 @@ private fun EdgeLightScreen(controller: EdgeController) {
       if (uri != null) scope.launch { controller.attachImage(uri) }
     }
 
-  val overlayPermissionLauncher = rememberLauncherForActivityResult(
-    ActivityResultContracts.StartActivityForResult()
-  ) {}
-
-  val context = androidx.compose.ui.platform.LocalContext.current
-
-  val mediaProjectionLauncher = rememberLauncherForActivityResult(
-    ActivityResultContracts.StartActivityForResult()
-  ) { result ->
-    if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-      BubbleOverlayService.mediaProjectionIntent = result.data
-      BubbleOverlayService.onImageCaptured = { file ->
-        val uri = android.net.Uri.fromFile(file)
-        scope.launch { controller.attachImage(uri) }
-      }
-      val serviceIntent = Intent(context, BubbleOverlayService::class.java)
-      context.startForegroundService(serviceIntent)
-    }
-  }
-
-  val manageFilesLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
-        scope.launch { controller.scanModels() }
-      }
-    }
-
-  val authManager = remember { com.terminus.edge.light.model.HuggingFaceAuthManager(context) }
-  val authLauncher = rememberLauncherForActivityResult(
-    ActivityResultContracts.StartActivityForResult()
-  ) { result ->
-    if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-      authManager.handleAuthResponse(result.data!!) { token, _ ->
-        if (token != null) {
-          controller.updateHfToken(token)
-        }
-      }
-    }
-  }
-
-  DisposableEffect(Unit) {
-    onDispose { authManager.dispose() }
-  }
-
   LaunchedEffect(Unit) { controller.restoreModel() }
   DisposableEffect(Unit) { onDispose { controller.close() } }
   val contextSnapshot = controller.contextSnapshot(prompt)
-  val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-  var currentTab by remember { mutableStateOf(0) }
 
-  Scaffold(
-    modifier = Modifier.fillMaxSize().imePadding(),
-    bottomBar = {
-      NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-        NavigationBarItem(
-          selected = currentTab == 0,
-          onClick = { currentTab = 0 },
-          icon = { Icon(Icons.Rounded.Menu, "Chat") },
-          label = { Text("Chat") }
-        )
-        NavigationBarItem(
-          selected = currentTab == 1,
-          onClick = { currentTab = 1 },
-          icon = { Icon(Icons.Rounded.Menu, "Context") },
-          label = { Text("Context") }
-        )
-        NavigationBarItem(
-          selected = currentTab == 2,
-          onClick = { currentTab = 2 },
-          icon = { Icon(Icons.Rounded.Settings, "Settings") },
-          label = { Text("Settings") }
-        )
-      }
-    }
-  ) { innerPadding ->
-    Box(modifier = Modifier.fillMaxSize().padding(innerPadding).safeDrawingPadding()) {
-      when (currentTab) {
-        0 -> {
-          Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
+  WorkspaceDrawer(
+    destination = destination,
+    onDestination = { destination = it },
+    onNewConversation = controller::newConversation,
+    scope = scope,
+  ) { openDrawer ->
     Column(
-      modifier = Modifier.fillMaxWidth(),
-      verticalArrangement = Arrangement.spacedBy(8.dp)
+      modifier =
+        Modifier.fillMaxSize()
+          .safeDrawingPadding()
+          .padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          IconButton(onClick = { scope.launch { drawerState.open() } }) {
-            Icon(Icons.Rounded.Menu, contentDescription = "Menu")
-          }
+        WorkspaceMenuButton(onClick = openDrawer)
+        if (destination == WorkspaceDestination.CHAT) {
+          ContextMeter(
+            snapshot = contextSnapshot,
+            onClick = { showContextManager = true },
+            modifier = Modifier.weight(1f),
+          )
+        } else {
           Text(
-            "LLM Capability Runner",
+            if (destination == WorkspaceDestination.CONVERSATIONS) "Conversations" else "Runtime Spine",
+            modifier = Modifier.weight(1f),
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium,
           )
         }
-        ContextMeter(
-          snapshot = contextSnapshot,
-          onClick = { showContextManager = true },
-          modifier = Modifier.width(180.dp),
-        )
-      }
-    }
-
-    ChatPanel(
-      messages = controller.messages,
-      compressedMessageIds = contextSnapshot.compressedEntryIds.toSet(),
-      themeMode = controller.themeMode,
-      modifier = Modifier.weight(1f).fillMaxWidth(),
-      onKeep = { message ->
-        pendingReview = message to ReviewDecision.KEEP
-      },
-      onReject = { message ->
-        pendingReview = message to ReviewDecision.REJECT
-      },
-      onEdit = { message ->
-        pendingReview = message to ReviewDecision.EDITED
-      },
-    )
-
-    Text(
-      controller.status,
-      color = MaterialTheme.colorScheme.primary,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-      style = MaterialTheme.typography.labelSmall,
-    )
-
-    ContextPressureNotice(
-      snapshot = contextSnapshot,
-      onManage = { showContextManager = true },
-      onCompress = { controller.compressContext(prompt) },
-    )
-
-    ComposerControlStrip(
-      ready = controller.model != null && !controller.isBusy,
-      enabled = !controller.isBusy,
-      onMemories = { showMemoryDeck = true },
-      onSkills = { showSkillLibrary = true },
-      onReceipts = { showReceipts = true },
-      onSettings = { showSettings = true },
-      onClear = controller::newConversation,
-    )
-
-    val composerBorderColor = if (controller.model != null && !controller.isBusy) EdgeLightPalette.Gold else MaterialTheme.colorScheme.outline
-    
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .border(2.dp, composerBorderColor, RoundedCornerShape(18.dp))
-        .padding(4.dp)
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Bottom
-      ) {
-        OutlinedTextField(
-          value = prompt,
-          onValueChange = { prompt = it },
-          modifier = Modifier.weight(1f),
-          placeholder = { Text("Ask Runner...", color = EdgeLightPalette.Gold) },
-          enabled = !controller.isBusy && controller.model != null,
-          minLines = 1,
-          maxLines = 6,
-          colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Color.Transparent,
-            unfocusedBorderColor = Color.Transparent,
-            disabledBorderColor = Color.Transparent,
-          )
-        )
-        Row(
-          modifier = Modifier.padding(bottom = 8.dp, end = 8.dp),
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          IconButton(
-            onClick = { importImage.launch(arrayOf("image/*")) },
-            enabled = !controller.isBusy && controller.model != null && controller.settings.imageInputEnabled && controller.pendingImage == null
-          ) {
-            Icon(
-              Icons.Rounded.AddCircle,
-              contentDescription = "Add image",
-              tint = if (controller.settings.imageInputEnabled) EdgeLightPalette.Cyan else Color.Gray
-            )
-          }
-          if (controller.isBusy) {
-            OutlinedButton(onClick = controller::cancel, shape = RoundedCornerShape(50)) {
-              Text("Stop")
-            }
-          } else {
-            GradientPillButton(
-              text = "Send",
-              onClick = {
-                if (controller.send(prompt)) prompt = ""
-              },
-              enabled = (prompt.isNotBlank() || controller.pendingImage != null) && controller.model != null,
-              contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-            )
-          }
+        IconButton(onClick = { showSettings = true }) {
+          Icon(Icons.Rounded.Settings, contentDescription = "Settings")
         }
       }
-    }
-    controller.pendingImage?.let { image ->
-      PendingImageCard(image = image, onRemove = controller::removePendingImage)
-    }
-          }
-        }
-        1 -> {
-          com.terminus.edge.light.context.HistoryTabUi(
-            sessionIds = controller.sessionIds,
+
+      when (destination) {
+        WorkspaceDestination.CONVERSATIONS ->
+          ConversationsScreen(
+            conversations = controller.conversations,
             activeSessionId = controller.activeSessionId,
-            onLoadConversation = { controller.loadConversation(it); currentTab = 0 },
-            onNewConversation = { controller.newConversation(); currentTab = 0 },
-            onManageMemories = { showMemoryDeck = true },
-            onManageSkills = { showSkillLibrary = true },
-            onViewReceipts = { showReceipts = true }
+            onOpen = {
+              controller.loadConversation(it)
+              destination = WorkspaceDestination.CHAT
+            },
+            onArchive = controller::archiveConversation,
           )
-        }
-        2 -> {
-          SettingsTabUi(
+        WorkspaceDestination.RUNTIME_SPINE ->
+          RuntimeSpineScreen(
+            result = controller.spineReadResult,
+            onRefresh = { scope.launch { controller.refreshRuntimeSpine() } },
+            onArchive = controller::archiveRuntimeSpine,
+          )
+        WorkspaceDestination.CHAT -> {
+          ChatPanel(
+            messages = controller.messages,
+            compressedMessageIds = contextSnapshot.compressedEntryIds.toSet(),
             themeMode = controller.themeMode,
-            modelLabel = controller.model?.let { "${it.displayName} (${it.sizeBytes / 1_000_000} MB)" } ?: "No Model Loaded",
-            isBusy = controller.isBusy,
-            traceEnabled = controller.traceEnabled,
-            traceStats = controller.traceStats,
-            bubbleModeEnabled = BubbleOverlayService.mediaProjectionIntent != null,
-            hfToken = controller.hfToken,
-            geminiApiKey = controller.geminiApiKey,
-            onThemeChange = controller::updateThemeMode,
-            onImportModel = { importModel.launch(arrayOf("*/*")) },
-            onDownloadModel = { showModelDownloader = true },
-            onScanModels = {
-              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                  data = android.net.Uri.parse("package:${context.packageName}")
-                }
-                manageFilesLauncher.launch(intent)
-              } else {
-                scope.launch { controller.scanModels() }
-              }
-            },
-            onTraceChange = { enabled -> controller.updateTraceEnabled(enabled, scope) },
-            onExportRaw = { pendingExport = ExportMode.RAW },
-            onExportCurated = { pendingExport = ExportMode.CURATED },
-            onExportReplay = { pendingExport = ExportMode.REPLAY },
-            onDeleteTraces = { showDeleteConfirmation = true },
-            onShowStorage = { showStorageUi = true },
-            onToggleBubbleMode = { enabled ->
-              if (enabled) {
-                if (!Settings.canDrawOverlays(context)) {
-                  val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${context.packageName}"))
-                  overlayPermissionLauncher.launch(intent)
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            onKeep = { message -> pendingReview = message to ReviewDecision.KEEP },
+            onReject = { message -> pendingReview = message to ReviewDecision.REJECT },
+            onEdit = { message -> pendingReview = message to ReviewDecision.EDITED },
+          )
+
+          if (
+            controller.isBusy ||
+              controller.status.contains("failed", ignoreCase = true) ||
+              controller.status.contains("error", ignoreCase = true) ||
+              controller.status.contains("stopped", ignoreCase = true)
+          ) {
+            Text(
+              controller.status,
+              color =
+                if (controller.status.contains("failed", true) || controller.status.contains("error", true)) {
+                  MaterialTheme.colorScheme.error
                 } else {
-                  val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                  mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
-                }
-              } else {
-                context.startService(Intent(context, BubbleOverlayService::class.java).apply { action = "STOP" })
-                BubbleOverlayService.mediaProjectionIntent = null
-              }
-            },
-            onUpdateHfToken = { controller.updateHfToken(it) },
-            onUpdateGeminiKey = { controller.updateGeminiApiKey(it) },
-            onOpenSwarmMonitor = { showSwarmMonitor = true },
-            onLoginHuggingFace = { authLauncher.launch(authManager.buildAuthIntent()) },
-            controller = controller
+                  MaterialTheme.colorScheme.primary
+                },
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+              style = MaterialTheme.typography.labelSmall,
+            )
+          }
+
+          ContextPressureNotice(
+            snapshot = contextSnapshot,
+            onManage = { showContextManager = true },
+            onCompress = { controller.compressContext(prompt) },
+          )
+
+          ComposerControlStrip(
+            enabled = !controller.isBusy,
+            onSkills = { showSkillLibrary = true },
+          )
+
+          controller.pendingImage?.let { image ->
+            PendingImageCard(image = image, onRemove = controller::removePendingImage)
+          }
+          IntegratedComposer(
+            value = prompt,
+            onValueChange = { prompt = it },
+            modelReady = controller.inferenceReady,
+            isBusy = controller.isBusy,
+            imageEnabled = controller.imageInputAvailable,
+            hasPendingImage = controller.pendingImage != null,
+            onAddImage = { importImage.launch(arrayOf("image/*")) },
+            onSend = { if (controller.send(prompt)) prompt = "" },
+            onStop = controller::cancel,
           )
         }
       }
@@ -461,11 +297,11 @@ private fun EdgeLightScreen(controller: EdgeController) {
         Text(
           when (mode) {
             ExportMode.RAW ->
-              "Raw JSONL contains full prompts, responses, system prompts, and receipt metadata in plaintext."
+               "Raw JSONL contains full prompts, responses, system prompts, and Runtime Spine metadata in plaintext."
             ExportMode.CURATED ->
               "Curated JSONL contains operator-approved training candidates in plaintext. Rights remain unverified."
             ExportMode.REPLAY ->
-              "The replay ZIP contains full trace history, context snapshots, and the exact model binary. It may be several gigabytes."
+              "The Replay Pack contains full trace history, context snapshots, and the exact model binary. It may be several gigabytes."
           }
         )
       },
@@ -474,9 +310,9 @@ private fun EdgeLightScreen(controller: EdgeController) {
           onClick = {
             pendingExport = null
             when (mode) {
-              ExportMode.RAW -> exportRaw.launch("runner-raw.jsonl")
-              ExportMode.CURATED -> exportCurated.launch("runner-training.jsonl")
-              ExportMode.REPLAY -> exportReplay.launch("runner-replay.zip")
+              ExportMode.RAW -> exportRaw.launch("edge-light-raw.jsonl")
+              ExportMode.CURATED -> exportCurated.launch("edge-light-training.jsonl")
+              ExportMode.REPLAY -> exportReplay.launch("runtime-spine-replay-pack.zip")
             }
           }
         ) {
@@ -492,20 +328,20 @@ private fun EdgeLightScreen(controller: EdgeController) {
   if (showDeleteConfirmation) {
     AlertDialog(
       onDismissRequest = { showDeleteConfirmation = false },
-      title = { Text("Delete all local traces?") },
+      title = { Text("Archive current runtime records?") },
       text = {
         Text(
-          "This removes the private event ledger and its Skill, conversation, image, and model snapshots from this device."
+          "This moves the active Runtime Spine, legacy trace ledger, and snapshots into a timestamped local archive. Nothing is deleted."
         )
       },
       confirmButton = {
         TextButton(
           onClick = {
-            controller.deleteTraces(scope)
+            controller.archiveTraces(scope)
             showDeleteConfirmation = false
           }
         ) {
-          Text("Delete")
+          Text("Archive")
         }
       },
       dismissButton = {
@@ -535,128 +371,61 @@ private fun EdgeLightScreen(controller: EdgeController) {
     )
   }
 
-  if (showReceipts) {
-    ReceiptsDialog(
-      traceEnabled = controller.traceEnabled,
-      traceStats = controller.traceStats,
-      isBusy = controller.isBusy,
-      modelLabel =
-        controller.model?.let {
-          "Model ${it.sha256.take(12)}... | ${formatBytes(it.sizeBytes)} " +
-            modelCapabilityTag(it, controller.settings.imageInputEnabled)
-        } ?: "No model imported",
-      onDismiss = { showReceipts = false },
-      onTraceChange = { enabled -> controller.updateTraceEnabled(enabled, scope) },
-      onExportRaw = {
-        showReceipts = false
-        pendingExport = ExportMode.RAW
-      },
-      onExportCurated = {
-        showReceipts = false
-        pendingExport = ExportMode.CURATED
-      },
-      onExportReplay = {
-        showReceipts = false
-        pendingExport = ExportMode.REPLAY
-      },
-      onDeleteTraces = {
-        showReceipts = false
-        showDeleteConfirmation = true
-      },
-    )
-  }
-
-
-  if (showStorageUi) {
-    StorageUiDialog(
-      archiveSize = controller.archiveSize,
-      blobStoreSize = controller.blobStoreSize,
-      onClearArchives = controller::clearArchives,
-      onClearBlobs = controller::clearBlobs,
-      onDismiss = { showStorageUi = false }
-    )
-  }
-
-  if (showSwarmMonitor) {
-    @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-    androidx.compose.material3.ModalBottomSheet(
-      onDismissRequest = { showSwarmMonitor = false },
-    ) {
-      SwarmMonitorUi(
-        agentStatesFlow = controller.agentStates,
-        onDismiss = { showSwarmMonitor = false }
-      )
-    }
-  }
-
-  if (showModelDownloader) {
-    ModelDownloaderDialog(
-      onDismiss = { showModelDownloader = false },
-      onModelDownloaded = { file ->
-        showModelDownloader = false
-        scope.launch { controller.importModel(android.net.Uri.fromFile(file)) }
-      },
-      downloadDir = File(androidx.compose.ui.platform.LocalContext.current.filesDir, "models"),
-      hfToken = controller.hfToken,
-      onTokenChanged = controller::updateHfToken,
-      onSignInClicked = { authLauncher.launch(authManager.buildAuthIntent()) }
-    )
-  }
-
-  if (controller.scannedModels.isNotEmpty()) {
-    AlertDialog(
-      onDismissRequest = { /* Cannot dismiss until user picks or cancels */ },
-      title = { Text("Select Scanned Model") },
-      text = {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 400.dp)
-            .verticalScroll(rememberScrollState()),
-          verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-          controller.scannedModels.forEach { descriptor ->
-            Box(
-              modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable {
-                  scope.launch { controller.selectScannedModel(java.io.File(descriptor.path)) }
-                }
-                .padding(12.dp)
-            ) {
-              Column {
-                Text(descriptor.displayName, fontWeight = FontWeight.SemiBold)
-                Text(descriptor.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(formatBytes(descriptor.sizeBytes), style = MaterialTheme.typography.labelSmall)
-              }
-            }
-          }
-        }
-      },
-      confirmButton = {},
-      dismissButton = {
-        TextButton(onClick = { controller.cancelScan() }) {
-          Text("Cancel")
-        }
-      }
-    )
-  }
-
-  if (showContextManager) {
-    ContextManagerSheet(
-      snapshot = contextSnapshot,
+  if (showSettings) {
+    SettingsDialog(
+      themeMode = controller.themeMode,
       settings = controller.settings,
       contextSettings = controller.contextSettings,
       systemPrompt = controller.systemPrompt,
+      modelLabel = controller.activeInferenceLabel,
       isBusy = controller.isBusy,
-      onDismiss = { showContextManager = false },
-      onPolicyChange = controller::updateMessageRetention,
-      onCompress = { controller.compressContext(prompt) },
-      onRestore = controller::restoreCompressedContext,
-      onClearTemporary = controller::clearTemporaryContext,
-      onNewConversation = controller::newConversation,
+      traceEnabled = controller.traceEnabled,
+      traceStats = controller.traceStats,
+      onDismiss = { showSettings = false },
+      onThemeChange = controller::updateThemeMode,
+      onOpenDeviceModels = {
+        showSettings = false
+        showDeviceModels = true
+        scope.launch { controller.scanModels() }
+      },
+      onOpenApiProviders = {
+        showSettings = false
+        showApiProviders = true
+      },
+      onImportModel = { importModel.launch(arrayOf("*/*")) },
+      onTraceChange = { enabled -> controller.updateTraceEnabled(enabled, scope) },
+      onExportRaw = {
+        showSettings = false
+        pendingExport = ExportMode.RAW
+      },
+      onExportCurated = {
+        showSettings = false
+        pendingExport = ExportMode.CURATED
+      },
+      onExportReplay = {
+        showSettings = false
+        pendingExport = ExportMode.REPLAY
+      },
+      onArchiveTraces = {
+        showSettings = false
+        showDeleteConfirmation = true
+      },
+      onOpenNotes = {
+        showSettings = false
+        showNotes = true
+      },
+      onOpenWorkflows = {
+        showSettings = false
+        showWorkflows = true
+      },
+      onOpenHuggingFaceAccess = {
+        showSettings = false
+        showHuggingFaceAccess = true
+      },
+      onDownloadModel = {
+        showSettings = false
+        showModelDownloader = true
+      },
       onApplyModelSettings = { settings, systemPrompt ->
         controller.updateModelSettings(settings, systemPrompt, scope)
       },
@@ -664,12 +433,85 @@ private fun EdgeLightScreen(controller: EdgeController) {
     )
   }
 
-  if (showMemoryDeck) {
-    MemoryDeckDialog(
-      memories = controller.memories,
-      selectedIds = controller.selectedMemoryIds,
-      onDismiss = { showMemoryDeck = false },
-      onToggle = controller::toggleMemory,
+  if (showNotes) {
+    HumanNotesDialog(
+      notes = notes,
+      onDismiss = { showNotes = false },
+      onSave = { id, title, body -> notes = notesStore.save(id, title, body) },
+      onArchive = { id -> notes = notesStore.archive(id) },
+    )
+  }
+
+  if (showWorkflows) {
+    WorkflowDraftsDialog(
+      drafts = workflows,
+      onDismiss = { showWorkflows = false },
+      onSave = { id, name, goal, steps ->
+        workflows = workflowStore.save(id, name, goal, steps)
+      },
+      onArchive = { id -> workflows = workflowStore.archive(id) },
+    )
+  }
+
+  if (showHuggingFaceAccess) {
+    HuggingFaceAccessDialog(
+      storedToken = controller.hfToken,
+      onDismiss = { showHuggingFaceAccess = false },
+      onSave = controller::updateHfToken,
+    )
+  }
+
+  if (showModelDownloader) {
+    ModelDownloaderDialog(
+      onDismiss = { showModelDownloader = false },
+      onModelDownloaded = { downloaded ->
+        showModelDownloader = false
+        scope.launch { controller.selectDownloadedModel(downloaded) }
+      },
+      downloadDir = File(appContext.filesDir, "models"),
+      hfToken = controller.hfToken,
+    )
+  }
+
+  if (showDeviceModels) {
+    DeviceModelsDialog(
+      models = controller.scannedModels,
+      activeModelPath = controller.model?.path,
+      isBusy = controller.isBusy,
+      onDismiss = { showDeviceModels = false },
+      onRefresh = { scope.launch { controller.scanModels() } },
+      onImport = {
+        showDeviceModels = false
+        importModel.launch(arrayOf("*/*"))
+      },
+      onSelect = { file ->
+        scope.launch {
+          controller.selectScannedModel(file)
+          if (!controller.isBusy) showDeviceModels = false
+        }
+      },
+    )
+  }
+
+  if (showApiProviders) {
+    ApiProvidersDialog(
+      configuration = controller.apiConfiguration,
+      storedGeminiKey = controller.geminiApiKey,
+      storedDeepSeekKey = controller.deepSeekApiKey,
+      onDismiss = { showApiProviders = false },
+      onSave = controller::updateApiProviders,
+    )
+  }
+
+  if (showContextManager) {
+    ContextManagerSheet(
+      snapshot = contextSnapshot,
+      onDismiss = { showContextManager = false },
+      onPolicyChange = controller::updateMessageRetention,
+      onCompress = { controller.compressContext(prompt) },
+      onRestore = controller::restoreCompressedContext,
+      onClearTemporary = controller::clearTemporaryContext,
+      onNewConversation = controller::newConversation,
     )
   }
 }
@@ -820,80 +662,112 @@ private fun ReviewScoreField(label: String, value: String, onValueChange: (Strin
 
 @Composable
 private fun ComposerControlStrip(
-  ready: Boolean,
   enabled: Boolean,
-  onMemories: () -> Unit,
   onSkills: () -> Unit,
-  onReceipts: () -> Unit,
-  onSettings: () -> Unit,
-  onClear: () -> Unit,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.spacedBy(7.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    Text(
-      if (ready) "Ready" else "Waiting",
-      color = MaterialTheme.colorScheme.primary,
-      style = MaterialTheme.typography.labelMedium,
-    )
-    GradientPillButton(
-      text = "Clear",
-      onClick = onClear,
-      enabled = enabled,
-      contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
-    )
-    GradientPillButton(
-      text = "Memories",
-      onClick = onMemories,
-      enabled = enabled,
-      contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
-    )
     GradientPillButton(
       text = "Skills",
       onClick = onSkills,
       enabled = enabled,
       contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
     )
-    GradientPillButton(
-      text = "Receipts",
-      onClick = onReceipts,
-      enabled = enabled,
-      contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
-    )
-    Spacer(Modifier.weight(1f))
+  }
+}
+
+@Composable
+private fun IntegratedComposer(
+  value: String,
+  onValueChange: (String) -> Unit,
+  modelReady: Boolean,
+  isBusy: Boolean,
+  imageEnabled: Boolean,
+  hasPendingImage: Boolean,
+  onAddImage: () -> Unit,
+  onSend: () -> Unit,
+  onStop: () -> Unit,
+) {
+  val enabled = modelReady && !isBusy
+  val canSend = modelReady && !isBusy && (value.isNotBlank() || hasPendingImage)
+  val shape = RoundedCornerShape(18.dp)
+  val borderColor =
+    if (modelReady) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+
+  Box(modifier = Modifier.fillMaxWidth().padding(top = 7.dp)) {
+    Row(
+      modifier =
+        Modifier.fillMaxWidth()
+          .border(2.dp, borderColor, shape)
+          .padding(start = 6.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+      verticalAlignment = Alignment.Bottom,
+      horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.weight(1f),
+        placeholder = { Text("Message") },
+        enabled = enabled,
+        minLines = 1,
+        maxLines = 6,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+        colors =
+          OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color.Transparent,
+            unfocusedBorderColor = Color.Transparent,
+            disabledBorderColor = Color.Transparent,
+          ),
+      )
+      IconButton(
+        onClick = onAddImage,
+        enabled = modelReady && !isBusy && !hasPendingImage,
+        modifier = Modifier.padding(bottom = 4.dp),
+      ) {
+        Icon(
+          imageVector = Icons.Rounded.PhotoLibrary,
+          contentDescription =
+            if (imageEnabled) "Add image" else "Images are not supported by the loaded model",
+          tint =
+            when {
+              !modelReady || isBusy || hasPendingImage -> MaterialTheme.colorScheme.onSurfaceVariant
+              imageEnabled -> EdgeLightPalette.Cyan
+              else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+      }
+      if (isBusy) {
+        OutlinedButton(
+          onClick = onStop,
+          shape = RoundedCornerShape(50),
+          modifier = Modifier.padding(bottom = 5.dp),
+        ) {
+          Text("Stop")
+        }
+      } else {
+        GradientPillButton(
+          text = "Send",
+          onClick = onSend,
+          enabled = canSend,
+          modifier = Modifier.padding(bottom = 6.dp),
+          contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+        )
+      }
+    }
     Text(
       "Message",
+      modifier =
+        Modifier.align(Alignment.TopEnd)
+          .offset(x = (-18).dp, y = (-8).dp)
+          .background(MaterialTheme.colorScheme.background)
+          .padding(horizontal = 7.dp),
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       style = MaterialTheme.typography.labelMedium,
     )
-    Box(
-      modifier =
-        Modifier.size(38.dp)
-          .clip(CircleShape)
-          .then(
-            if (LocalEdgeThemeMode.current == EdgeThemeMode.DEFAULT) {
-              Modifier.background(EdgeLightPalette.Gradient)
-            } else {
-              Modifier.background(MaterialTheme.colorScheme.primary)
-            }
-          )
-          .clickable(enabled = enabled, role = Role.Button, onClick = onSettings),
-      contentAlignment = Alignment.Center,
-    ) {
-      Icon(
-        imageVector = Icons.Rounded.Settings,
-        contentDescription = "Settings",
-        tint =
-          if (LocalEdgeThemeMode.current == EdgeThemeMode.DEFAULT) {
-            Color.White
-          } else {
-            MaterialTheme.colorScheme.onPrimary
-          },
-        modifier = Modifier.size(20.dp),
-      )
-    }
   }
 }
 
@@ -907,13 +781,6 @@ private fun ChatPanel(
   onReject: (UiMessage) -> Unit,
   onEdit: (UiMessage) -> Unit,
 ) {
-  val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-  LaunchedEffect(messages.size) {
-    if (messages.isNotEmpty()) {
-      listState.animateScrollToItem(messages.lastIndex)
-    }
-  }
-
   val background =
     if (themeMode == EdgeThemeMode.LIGHT) MaterialTheme.colorScheme.surface
     else EdgeLightPalette.ChatBlack
@@ -934,7 +801,6 @@ private fun ChatPanel(
       )
     } else {
       LazyColumn(
-        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(7.dp),
       ) {
@@ -968,24 +834,37 @@ private fun MessageCard(
     }
   val contentColor =
     when (message.role) {
-      MessageRole.USER -> EdgeLightPalette.Gold
-      MessageRole.ASSISTANT -> EdgeLightPalette.DeepPurple
-      MessageRole.ERROR -> EdgeLightPalette.Cyan
+      MessageRole.USER -> MaterialTheme.colorScheme.onPrimaryContainer
+      MessageRole.ASSISTANT -> MaterialTheme.colorScheme.onSecondaryContainer
+      MessageRole.ERROR -> MaterialTheme.colorScheme.onErrorContainer
     }
   Card(
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(12.dp),
     colors = CardDefaults.cardColors(containerColor = background),
-    border = edgeLightBorder(),
+    border =
+      BorderStroke(
+        1.dp,
+        when (message.role) {
+          MessageRole.USER -> EdgeLightPalette.Gold.copy(alpha = 0.72f)
+          MessageRole.ASSISTANT -> EdgeLightPalette.Cyan.copy(alpha = 0.72f)
+          MessageRole.ERROR -> MaterialTheme.colorScheme.error
+        },
+      ),
   ) {
     Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
       Text(
         when (message.role) {
-          MessageRole.USER -> "Operator"
-          MessageRole.ASSISTANT -> "Agent"
-          MessageRole.ERROR -> "System"
+          MessageRole.USER -> "You"
+          MessageRole.ASSISTANT -> "Assistant"
+          MessageRole.ERROR -> "Error"
         },
-        color = contentColor,
+        color =
+          when (message.role) {
+            MessageRole.USER -> EdgeLightPalette.HotPink
+            MessageRole.ASSISTANT -> EdgeLightPalette.Cyan
+            MessageRole.ERROR -> MaterialTheme.colorScheme.error
+          },
         style = MaterialTheme.typography.labelMedium,
       )
       if (
@@ -1033,10 +912,6 @@ private fun MessageCard(
         Spacer(Modifier.height(6.dp))
         if (message.reviewDecision == null) {
           Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-            TextButton(onClick = { clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(message.content)) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-              Text("Copy")
-            }
             TextButton(onClick = onKeep, contentPadding = PaddingValues(horizontal = 8.dp)) {
               Text("Keep")
             }
@@ -1069,11 +944,4 @@ private fun formatBytes(bytes: Long): String {
     index += 1
   }
   return "${DecimalFormat("0.0").format(value)} ${units[index]}"
-}
-
-private fun modelCapabilityTag(model: ModelDescriptor, imageInputEnabled: Boolean): String {
-  val knownVisionModel =
-    model.displayName.contains("gemma-4", ignoreCase = true) ||
-      model.displayName.contains("gemma-3n", ignoreCase = true)
-  return if (imageInputEnabled || knownVisionModel) "[Vision]" else "[Text]"
 }

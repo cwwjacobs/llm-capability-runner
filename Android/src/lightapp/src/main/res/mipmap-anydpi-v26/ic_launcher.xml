@@ -4,6 +4,6 @@
     <foreground>
         <inset
             android:drawable="@drawable/edge_light_launcher_art"
-            android:inset="16%" />
+            android:inset="4%" />
     </foreground>
 </adaptive-icon>

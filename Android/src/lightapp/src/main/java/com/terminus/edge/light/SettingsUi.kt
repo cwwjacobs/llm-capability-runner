@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -38,191 +37,308 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.terminus.edge.light.context.ContextMode
+import com.terminus.edge.light.context.ContextSettings
+import com.terminus.edge.light.inference.GenerationSettings
 import com.terminus.edge.light.trace.TraceStats
 
 @Composable
-fun SettingsTabUi(
+internal fun SettingsDialog(
   themeMode: EdgeThemeMode,
+  settings: GenerationSettings,
+  contextSettings: ContextSettings,
+  systemPrompt: String,
   modelLabel: String,
   isBusy: Boolean,
   traceEnabled: Boolean,
   traceStats: TraceStats,
-  bubbleModeEnabled: Boolean,
-  hfToken: String,
-  geminiApiKey: String,
+  onDismiss: () -> Unit,
   onThemeChange: (EdgeThemeMode) -> Unit,
+  onOpenDeviceModels: () -> Unit,
+  onOpenApiProviders: () -> Unit,
   onImportModel: () -> Unit,
-  onDownloadModel: () -> Unit,
-  onScanModels: () -> Unit,
   onTraceChange: (Boolean) -> Unit,
   onExportRaw: () -> Unit,
   onExportCurated: () -> Unit,
   onExportReplay: () -> Unit,
-  onDeleteTraces: () -> Unit,
-  onShowStorage: () -> Unit,
-  onToggleBubbleMode: (Boolean) -> Unit,
-  onUpdateHfToken: (String) -> Unit,
-  onUpdateGeminiKey: (String) -> Unit,
-  onOpenSwarmMonitor: () -> Unit,
-  onLoginHuggingFace: () -> Unit,
-  controller: EdgeController,
+  onArchiveTraces: () -> Unit,
+  onOpenNotes: () -> Unit,
+  onOpenWorkflows: () -> Unit,
+  onOpenHuggingFaceAccess: () -> Unit,
+  onDownloadModel: () -> Unit,
+  onApplyModelSettings: (GenerationSettings, String) -> Unit,
+  onApplyContextSettings: (ContextSettings) -> Unit,
 ) {
-  Column(
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(16.dp)
-      .verticalScroll(rememberScrollState()),
-    verticalArrangement = Arrangement.spacedBy(16.dp),
-  ) {
-    Text("Settings", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-    
-    AccordionMenu("Swarm Personas", initiallyExpanded = true) {
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        OutlinedButton(onClick = onOpenSwarmMonitor) { Text("Swarm Monitor") }
-      }
-      com.terminus.edge.light.inference.AgentRole.entries.forEach { role ->
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Text(role.name, style = MaterialTheme.typography.bodyMedium)
-          com.terminus.edge.light.persona.PersonaSelector(
-            personas = controller.personas,
-            activePersonaId = controller.activePersonaIds[role],
-            onSelect = { id -> controller.setActivePersona(role, id) }
-          )
-        }
-      }
+  var maxTokens by remember(settings) { mutableStateOf(settings.maxTokens.toString()) }
+  var topK by remember(settings) { mutableStateOf(settings.topK.toString()) }
+  var topP by remember(settings) { mutableStateOf(settings.topP.toString()) }
+  var temperature by remember(settings) { mutableStateOf(settings.temperature.toString()) }
+  var imageInputEnabled by remember(settings) { mutableStateOf(settings.imageInputEnabled) }
+  var prompt by remember(systemPrompt) { mutableStateOf(systemPrompt) }
+  var contextMode by remember(contextSettings) { mutableStateOf(contextSettings.mode) }
+  var contextThreshold by
+    remember(contextSettings) {
+      mutableStateOf(contextSettings.compressionThresholdPercent.toString())
     }
+  var contextReserve by
+    remember(contextSettings) { mutableStateOf(contextSettings.reservedOutputTokens.toString()) }
+  val parsedSettings =
+    GenerationSettings(
+      maxTokens = maxTokens.toIntOrNull() ?: -1,
+      topK = topK.toIntOrNull() ?: -1,
+      topP = topP.toDoubleOrNull() ?: -1.0,
+      temperature = temperature.toDoubleOrNull() ?: -1.0,
+      imageInputEnabled = imageInputEnabled,
+    )
+  val isValid =
+    parsedSettings.maxTokens in 256..32768 &&
+      parsedSettings.topK in 1..1024 &&
+      parsedSettings.topP in 0.0..1.0 &&
+      parsedSettings.temperature in 0.0..2.0 &&
+      contextThreshold.toIntOrNull() in 50..90 &&
+      contextReserve.toIntOrNull() in
+        128..(parsedSettings.maxTokens / 2).coerceAtLeast(128) &&
+      prompt.isNotBlank()
+  val parsedContextSettings =
+    ContextSettings(
+      mode = contextMode,
+      compressionThresholdPercent = contextThreshold.toIntOrNull() ?: -1,
+      reservedOutputTokens = contextReserve.toIntOrNull() ?: -1,
+    )
 
-    AccordionMenu("API Keys & Providers") {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Settings") },
+    text = {
+      Column(
+        modifier =
+          Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        OutlinedTextField(
-          value = hfToken,
-          onValueChange = onUpdateHfToken,
-          label = { Text("Hugging Face Access Token") },
-          modifier = Modifier.weight(1f).padding(vertical = 4.dp),
-          visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-          singleLine = true
+        Text(
+          "App settings",
+          color = MaterialTheme.colorScheme.primary,
+          style = MaterialTheme.typography.titleMedium,
         )
-        OutlinedButton(onClick = onLoginHuggingFace) {
-          Text("Login")
-        }
-      }
-      OutlinedTextField(
-        value = geminiApiKey,
-        onValueChange = onUpdateGeminiKey,
-        label = { Text("Gemini API Key") },
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-        singleLine = true
-      )
-    }
-
-    AccordionMenu("Model") {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        OutlinedButton(onClick = onImportModel, enabled = !isBusy) { Text("Import") }
-        OutlinedButton(onClick = onDownloadModel, enabled = !isBusy) { Text("Download") }
-      }
-      OutlinedButton(onClick = onScanModels, enabled = !isBusy) { Text("Scan Local Storage") }
-      Text(modelLabel, style = MaterialTheme.typography.bodySmall)
-    }
-
-    AccordionMenu("App Preferences") {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        EdgeThemeMode.entries.forEach { mode ->
-          if (mode == themeMode) {
-            GradientPillButton(
-              text = mode.name.lowercase().replaceFirstChar(Char::uppercase),
-              onClick = {},
-            )
-          } else {
-            OutlinedButton(onClick = { onThemeChange(mode) }) {
-              Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          EdgeThemeMode.entries.forEach { mode ->
+            if (mode == themeMode) {
+              GradientPillButton(
+                text = mode.name.lowercase().replaceFirstChar(Char::uppercase),
+                onClick = {},
+              )
+            } else {
+              OutlinedButton(onClick = { onThemeChange(mode) }) {
+                Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))
+              }
             }
           }
         }
-      }
-      Spacer(Modifier.height(12.dp))
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text("Screen Share (Bubble)")
-          Text("Enable media projection overlay.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        TraceRecordingSwitch(
-          checked = bubbleModeEnabled,
-          onCheckedChange = onToggleBubbleMode,
-          enabled = true,
+        HorizontalDivider()
+        Text(
+          "Models and APIs",
+          color = MaterialTheme.colorScheme.primary,
+          style = MaterialTheme.typography.titleMedium,
         )
-      }
-    }
+        Text(modelLabel, style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(
+          onClick = onOpenDeviceModels,
+          enabled = !isBusy,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text("Models on this device")
+        }
+        OutlinedButton(
+          onClick = onImportModel,
+          enabled = !isBusy,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text("Import model")
+        }
+        GradientPillButton(
+          text = "Browse Hugging Face models",
+          onClick = onDownloadModel,
+          enabled = !isBusy,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(
+          onClick = onOpenApiProviders,
+          enabled = !isBusy,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text("API providers")
+        }
 
-    AccordionMenu("Local Traces") {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text("Trace recording")
+        HorizontalDivider()
+        Text(
+          "Workspace and access",
+          color = MaterialTheme.colorScheme.primary,
+          style = MaterialTheme.typography.titleMedium,
+        )
+        OutlinedButton(onClick = onOpenNotes, modifier = Modifier.fillMaxWidth()) {
+          Text("Human notes")
+        }
+        OutlinedButton(onClick = onOpenWorkflows, modifier = Modifier.fillMaxWidth()) {
+          Text("Workflow drafts")
+        }
+        OutlinedButton(onClick = onOpenHuggingFaceAccess, modifier = Modifier.fillMaxWidth()) {
+          Text("Hugging Face access")
+        }
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Column {
+            Text("Runtime Spine capture")
+            Text(
+              "${traceStats.eventCount} events | ${traceStats.completed} complete | ${traceStats.unreviewed} unreviewed",
+              style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+              "Integrity: ${traceStats.integrityStatus.replace('_', ' ')}",
+              color =
+                if (traceStats.integrityStatus == "failed") {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+              style = MaterialTheme.typography.labelSmall,
+            )
+          }
+          TraceRecordingSwitch(
+            checked = traceEnabled,
+            onCheckedChange = onTraceChange,
+            enabled = !isBusy,
+          )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          TextButton(onClick = onExportRaw, enabled = traceStats.eventCount > 0) { Text("Raw") }
+          TextButton(onClick = onExportCurated, enabled = traceStats.completed > 0) {
+            Text("Curated")
+          }
+          TextButton(onClick = onExportReplay, enabled = traceStats.inferenceAttempts > 0) {
+            Text("Replay Pack")
+          }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          TextButton(onClick = onArchiveTraces, enabled = traceStats.eventCount > 0) {
+            Text("Archive")
+          }
+        }
+        Text(
+          "Full local capture is enabled by default. Exports contain plaintext prompts and responses; a Replay Pack also includes context artifacts and exact model snapshots.",
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          style = MaterialTheme.typography.labelSmall,
+        )
+
+        HorizontalDivider()
+        Text(
+          "Context management",
+          color = MaterialTheme.colorScheme.primary,
+          style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+          "The meter uses exact characters and an estimated four characters per token.",
+          style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          ContextMode.entries.forEach { mode ->
+            if (mode == contextMode) {
+              GradientPillButton(text = mode.label, onClick = {})
+            } else {
+              OutlinedButton(onClick = { contextMode = mode }) { Text(mode.label) }
+            }
+          }
+        }
+        NumericSettingField("Compression threshold %", contextThreshold) {
+          contextThreshold = it
+        }
+        NumericSettingField("Reserved output tokens", contextReserve) { contextReserve = it }
+        Text(
+          when (contextMode) {
+            ContextMode.MANUAL -> "Only operator-requested compression is applied."
+            ContextMode.ASSISTED -> "Edge Light warns when compression is recommended."
+            ContextMode.AUTOMATIC ->
+              "Older compressible entries are summarized automatically at the threshold."
+          },
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          style = MaterialTheme.typography.labelSmall,
+        )
+
+        HorizontalDivider()
+        Text(
+          "Customize model settings",
+          color = MaterialTheme.colorScheme.primary,
+          style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+          "Changes reload the current model and begin a fresh conversation.",
+          style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text("Image input")
+            Text(
+              "Enable only for multimodal models. Vision uses the GPU backend.",
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              style = MaterialTheme.typography.labelSmall,
+            )
+          }
+          TraceRecordingSwitch(
+            checked = imageInputEnabled,
+            onCheckedChange = { imageInputEnabled = it },
+            enabled = !isBusy,
+          )
+        }
+        NumericSettingField("Context size / max tokens", maxTokens) { maxTokens = it }
+        NumericSettingField("Top K", topK) { topK = it }
+        NumericSettingField("Top P", topP, decimal = true) { topP = it }
+        NumericSettingField("Temperature", temperature, decimal = true) { temperature = it }
+        OutlinedTextField(
+          value = prompt,
+          onValueChange = { prompt = it },
+          modifier = Modifier.fillMaxWidth(),
+          label = { Text("System Prompt") },
+          supportingText = { Text("Persistent instructions applied to every response.") },
+          minLines = 4,
+        )
+        if (!isValid) {
           Text(
-            "${traceStats.eventCount} events | ${traceStats.completed} complete | ${traceStats.unreviewed} unreviewed",
+            "Use context 256-32768, Top K 1-1024, Top P 0-1, temperature 0-2, " +
+              "threshold 50-90, a reserve no larger than half the context size, and a non-empty prompt.",
+            color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
           )
-          Text(
-            "Integrity: ${traceStats.integrityStatus.replace('_', ' ')}",
-            color =
-              if (traceStats.integrityStatus == "failed") {
-                MaterialTheme.colorScheme.error
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-            style = MaterialTheme.typography.labelSmall,
-          )
         }
-        TraceRecordingSwitch(
-          checked = traceEnabled,
-          onCheckedChange = onTraceChange,
-          enabled = !isBusy,
-        )
       }
-      Spacer(Modifier.height(12.dp))
-      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        TextButton(onClick = onShowStorage) { Text("Archives") }
-        TextButton(onClick = onExportRaw, enabled = traceStats.eventCount > 0) { Text("Raw") }
-        TextButton(onClick = onExportCurated, enabled = traceStats.completed > 0) { Text("Curated") }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = {
+          onApplyContextSettings(parsedContextSettings)
+          onApplyModelSettings(parsedSettings, prompt.trim())
+          onDismiss()
+        },
+        enabled = isValid && !isBusy,
+      ) {
+        Text("Apply")
       }
-      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        TextButton(onClick = onExportReplay, enabled = traceStats.inferenceAttempts > 0) { Text("Replay ZIP") }
-        TextButton(onClick = onDeleteTraces, enabled = traceStats.eventCount > 0) { Text("Delete") }
-      }
-      Text(
-        "Exports contain plaintext prompts and responses. Replay also includes context artifacts and the exact model snapshot.",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        style = MaterialTheme.typography.labelSmall,
-      )
-    }
-  }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+  )
 }
 
 @Composable
-internal fun TraceRecordingSwitch(
+private fun TraceRecordingSwitch(
   checked: Boolean,
   onCheckedChange: (Boolean) -> Unit,
   enabled: Boolean,
@@ -280,46 +396,7 @@ internal fun TraceRecordingSwitch(
 }
 
 @Composable
-fun SliderSettingField(
-  label: String,
-  value: String,
-  valueRange: ClosedFloatingPointRange<Float>,
-  decimal: Boolean = false,
-  onValueChange: (String) -> Unit
-) {
-  val floatValue = value.toFloatOrNull() ?: valueRange.start
-  Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-      Text(label, style = MaterialTheme.typography.bodyMedium)
-      OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = Modifier.width(100.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number),
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodySmall,
-      )
-    }
-    androidx.compose.material3.Slider(
-      value = floatValue,
-      onValueChange = { 
-        if (decimal) {
-          onValueChange(String.format("%.2f", it))
-        } else {
-          onValueChange(it.toInt().toString())
-        }
-      },
-      valueRange = valueRange
-    )
-  }
-}
-
-@Composable
-internal fun NumericSettingField(
+private fun NumericSettingField(
   label: String,
   value: String,
   decimal: Boolean = false,

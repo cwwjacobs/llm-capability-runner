@@ -456,7 +456,11 @@ class TraceLedger(
     exported
   }
 
-  fun exportReplay(output: OutputStream): ReplayExportResult = synchronized(lock) {
+  fun exportReplay(
+    output: OutputStream,
+    extraFiles: Map<String, ByteArray> = emptyMap(),
+    extraArtifacts: Map<String, Pair<File, String?>> = emptyMap(),
+  ): ReplayExportResult = synchronized(lock) {
     val store = requireNotNull(artifactStore) { "Replay export requires a trace artifact store." }
     val parsed = readEvents()
     val events = parsed.mapNotNull(ParsedLine::event)
@@ -502,6 +506,12 @@ class TraceLedger(
             file = file,
             expectedSha256 = reference.sha256,
           )
+      }
+      extraFiles.toSortedMap().forEach { (path, bytes) ->
+        files += writeZipBytes(zip, path, bytes)
+      }
+      extraArtifacts.toSortedMap().forEach { (path, artifact) ->
+        files += writeZipFile(zip, path, artifact.first, artifact.second)
       }
       zip.setLevel(6)
       val manifest =
@@ -941,10 +951,15 @@ class TraceLedger(
     }
   }
 
-  private fun writeZipBytes(zip: ZipOutputStream, path: String, bytes: ByteArray) {
+  private fun writeZipBytes(zip: ZipOutputStream, path: String, bytes: ByteArray): JsonObject {
     zip.putNextEntry(ZipEntry(path))
     zip.write(bytes)
     zip.closeEntry()
+    return buildJsonObject {
+      put("path", path)
+      put("sha256", TraceIntegrity.sha256(bytes))
+      put("size_bytes", bytes.size)
+    }
   }
 
   private fun parseEvent(line: String): JsonObject? =

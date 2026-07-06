@@ -20,9 +20,15 @@ import com.terminus.edge.light.image.ImageAttachmentLoader
 import com.terminus.edge.light.inference.GenerationSettings
 import com.terminus.edge.light.inference.LiteRtSwarmEngine
 import com.terminus.edge.light.inference.AgentRole
+import com.terminus.edge.light.inference.ApiProviderConfiguration
+import com.terminus.edge.light.inference.InferenceBackend
+import com.terminus.edge.light.inference.RemoteApiClient
 import com.terminus.edge.light.model.ModelDescriptor
+import com.terminus.edge.light.model.DownloadedModel
 import com.terminus.edge.light.model.ModelStore
 import com.terminus.edge.light.model.StagedModel
+import com.terminus.edge.light.ledger.ConversationEntity
+import com.terminus.edge.light.ledger.ConversationLedger
 import com.terminus.edge.light.skill.ContextPrompt
 import com.terminus.edge.light.skill.SkillRecord
 import com.terminus.edge.light.skill.SkillVault
@@ -40,6 +46,9 @@ import com.terminus.edge.light.trace.ReviewTrace
 import com.terminus.edge.light.trace.TraceArtifactStore
 import com.terminus.edge.light.trace.TraceIntegrity
 import com.terminus.edge.light.trace.TraceLedger
+import com.terminus.edge.light.spine.RuntimeSpine
+import com.terminus.edge.light.spine.SpineReadResult
+import com.terminus.edge.light.spine.SpineRecordType
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CancellationException
@@ -102,11 +111,18 @@ class EdgeController(private val context: Context) : AutoCloseable {
   )
   private val modelStore = ModelStore(context)
   private val engine = LiteRtSwarmEngine(context)
+  private val remoteApiClient = RemoteApiClient()
   val agentStates = engine.agentStates
   private val traceRoot = File(context.filesDir, "traces")
   private val traceArtifactStore = TraceArtifactStore(File(traceRoot, "artifacts"))
   private val traceLedger =
     TraceLedger(File(traceRoot, "trace_events.jsonl"), artifactStore = traceArtifactStore)
+  private val conversationLedger = ConversationLedger(context)
+  private val runtimeSpine =
+    RuntimeSpine(
+      file = File(context.filesDir, "runtime_spine/runtime-spine.jsonl"),
+      legacyTraceFile = File(traceRoot, "trace_events.jsonl"),
+    )
   private val skillVault = SkillVault(File(context.filesDir, "skills"))
   private var conversationTurns = emptyList<ConversationTurn>()
   private var nextTurnIndex = 0
@@ -125,6 +141,25 @@ class EdgeController(private val context: Context) : AutoCloseable {
   var hfToken by mutableStateOf(securePreferences.getString("hf_token", "") ?: "")
     private set
   var geminiApiKey by mutableStateOf(securePreferences.getString("gemini_api_key", "") ?: "")
+    private set
+  var deepSeekApiKey by
+    mutableStateOf(securePreferences.getString("deepseek_api_key", "") ?: "")
+    private set
+  var inferenceBackend by
+    mutableStateOf(
+      InferenceBackend.fromWireValue(preferences.getString(KEY_INFERENCE_BACKEND, null))
+    )
+    private set
+  var geminiModel by
+    mutableStateOf(
+      preferences.getString(KEY_GEMINI_MODEL, DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL
+    )
+    private set
+  var deepSeekModel by
+    mutableStateOf(
+      preferences.getString(KEY_DEEPSEEK_MODEL, DEFAULT_DEEPSEEK_MODEL)
+        ?: DEFAULT_DEEPSEEK_MODEL
+    )
     private set
   var themeMode by
     mutableStateOf(EdgeThemeMode.fromWireValue(preferences.getString(KEY_THEME_MODE, null)))
@@ -148,6 +183,8 @@ class EdgeController(private val context: Context) : AutoCloseable {
 
   var sessionIds by mutableStateOf<List<String>>(emptyList())
     private set
+  var conversations by mutableStateOf<List<ConversationEntity>>(emptyList())
+    private set
   var activeSessionId by mutableStateOf<String?>(null)
     private set
   var personas by mutableStateOf<List<Persona>>(emptyList())
@@ -163,9 +200,16 @@ class EdgeController(private val context: Context) : AutoCloseable {
   var selectedMemoryIds by mutableStateOf<Set<String>>(emptySet())
     private set
 
-  var status by mutableStateOf("Import a LiteRT-LM model to begin.")
+  var status by mutableStateOf("Import a GGUF or LiteRT-LM model to begin.")
     private set
-  var traceEnabled by mutableStateOf(preferences.getBoolean(KEY_TRACE_ENABLED, false))
+  var traceEnabled by
+    mutableStateOf(
+      if (preferences.contains(KEY_TRACE_ENABLED)) {
+        preferences.getBoolean(KEY_TRACE_ENABLED, true)
+      } else {
+        true
+      }
+    )
     private set
   var traceStats by mutableStateOf(traceLedger.stats())
     private set
@@ -173,10 +217,33 @@ class EdgeController(private val context: Context) : AutoCloseable {
     private set
   var selectedSkillIds by mutableStateOf<Set<String>>(emptySet())
     private set
+  var spineReadResult by mutableStateOf(SpineReadResult(emptyList(), 0, 0, true))
+    private set
 
   init {
+    if (!preferences.getBoolean(KEY_SPINE_DEFAULT_APPLIED, false)) {
+      traceEnabled = true
+      preferences
+        .edit()
+        .putBoolean(KEY_TRACE_ENABLED, true)
+        .putBoolean(KEY_SPINE_DEFAULT_APPLIED, true)
+        .apply()
+    }
     seedBundledSkills()
     refreshSkills()
+    activeSessionId = sessionId
+    controllerScope.launch {
+      refreshConversations()
+      refreshRuntimeSpine()
+      appendSpine(
+        type = SpineRecordType.CONTINUITY_LOG,
+        payload =
+          buildJsonObject {
+            put("action", "session_opened")
+            put("session_id", sessionId)
+          },
+      )
+    }
   }
 
   suspend fun scanModels() {
@@ -205,8 +272,11 @@ class EdgeController(private val context: Context) : AutoCloseable {
     status = "Loading ${file.name}..."
     val previous = model
     try {
-      val descriptor = withContext(Dispatchers.IO) { modelStore.commitExternal(file) }
+      val descriptor = withContext(Dispatchers.IO) { modelStore.commitExternal(file, persist = false) }
       loadModel(descriptor)
+      withContext(Dispatchers.IO) { modelStore.persistExternal(descriptor) }
+      model = descriptor
+      persistInferenceBackend(InferenceBackend.LOCAL)
       status = "Model loaded successfully."
       scannedModels = emptyList() // clear after picking
     } catch (error: Throwable) {
@@ -217,7 +287,40 @@ class EdgeController(private val context: Context) : AutoCloseable {
     }
   }
 
+  suspend fun selectDownloadedModel(downloaded: DownloadedModel) {
+    check(!isBusy) { "Wait for the current operation to finish." }
+    isBusy = true
+    status = "Validating ${downloaded.modelFile.name}..."
+    val previous = model
+    try {
+      val descriptor =
+        withContext(Dispatchers.IO) {
+          modelStore.commitExternal(
+            file = downloaded.modelFile,
+            projector = downloaded.projectorFile,
+            sourceRepository = downloaded.repositoryId,
+            sourceRevision = downloaded.revision,
+            persist = false,
+          )
+        }
+      loadModel(descriptor)
+      withContext(Dispatchers.IO) { modelStore.persistExternal(descriptor) }
+      model = descriptor
+      persistInferenceBackend(InferenceBackend.LOCAL)
+      status = "${descriptor.displayName} loaded."
+    } catch (error: Throwable) {
+      status = error.message ?: "Downloaded model could not be loaded."
+      previous?.let { runCatching { loadModel(it) } }
+    } finally {
+      isBusy = false
+    }
+  }
+
   suspend fun restoreModel() {
+    if (inferenceBackend != InferenceBackend.LOCAL) {
+      status = "${inferenceBackend.label} ready."
+      return
+    }
     val current = model ?: return
     isBusy = true
     try {
@@ -243,6 +346,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
       loadModel(candidate.descriptor)
       val imported = withContext(Dispatchers.IO) { modelStore.commit(candidate) }
       model = imported
+      persistInferenceBackend(InferenceBackend.LOCAL)
       resetConversationTracking()
       pendingImage = null
       status = "Ready."
@@ -266,8 +370,8 @@ class EdgeController(private val context: Context) : AutoCloseable {
 
   suspend fun attachImage(uri: Uri) {
     if (isBusy) return
-    if (!settings.imageInputEnabled) {
-      status = "Enable image input in Settings before attaching an image."
+    if (!imageInputAvailable) {
+      status = "The selected inference backend does not expose image input."
       return
     }
     isBusy = true
@@ -289,11 +393,14 @@ class EdgeController(private val context: Context) : AutoCloseable {
   }
 
   fun send(prompt: String): Boolean {
-    val activeModel = model ?: return false
+    val activeModel = model
+    val activeBackend = inferenceBackend
+    if (!inferenceReady) return false
+    if (activeBackend == InferenceBackend.LOCAL && activeModel == null) return false
     val activeImage = pendingImage
     if (isBusy || (prompt.isBlank() && activeImage == null)) return false
-    if (activeImage != null && !settings.imageInputEnabled) {
-      status = "Enable image input in Settings and reload the model."
+    if (activeImage != null && !imageInputAvailable) {
+      status = "The selected inference backend does not support this image attachment."
       return false
     }
 
@@ -352,6 +459,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
       messages +
         userMessage +
         UiMessage(id = assistantId, role = MessageRole.ASSISTANT, content = "")
+    controllerScope.launch { persistConversationMessage(userMessage) }
     pendingImage = null
     isBusy = true
     status =
@@ -360,7 +468,9 @@ class EdgeController(private val context: Context) : AutoCloseable {
         contextSnapshot.newlyCompressedIds.isEmpty() -> "Generating..."
         else -> "Compressed ${contextSnapshot.newlyCompressedIds.size} context entries. Generating..."
       }
-    val recordThisResponse = traceEnabled
+    val recordThisResponse =
+      traceEnabled && activeBackend == InferenceBackend.LOCAL && activeModel != null
+    val spineTraceId = UUID.randomUUID().toString()
 
     val serviceIntent = Intent(context, RunnerForegroundService::class.java)
     context.startForegroundService(serviceIntent)
@@ -373,13 +483,30 @@ class EdgeController(private val context: Context) : AutoCloseable {
       var activeTrace: InferenceStartedTrace? = null
       var traceError: Throwable? = null
       try {
-        withContext(Dispatchers.IO) { engine.resetConversation(AgentRole.ORCHESTRATOR) }
+        if (activeBackend == InferenceBackend.LOCAL) {
+          withContext(Dispatchers.IO) { engine.resetConversation(AgentRole.ORCHESTRATOR) }
+        }
+        appendSpine(
+          type = SpineRecordType.TRACE,
+          traceId = spineTraceId,
+          payload =
+            buildJsonObject {
+              put("phase", "started")
+              put("turn_index", turnIndex)
+              put("user_prompt", userMessage.content)
+              put("effective_prompt", effectivePrompt)
+              put("has_image", activeImage != null)
+              put("backend", activeBackend.wireValue)
+              put("model", activeBackendModelLabel())
+            },
+        )
         if (recordThisResponse) {
+          val traceModel = requireNotNull(activeModel)
           status = "Preparing trace snapshot..."
           runCatching {
               withContext(Dispatchers.IO) {
                 createStartedTrace(
-                  activeModel = activeModel,
+                  activeModel = traceModel,
                   turnIndex = turnIndex,
                   parentTraceId = parentTraceId,
                   userPrompt = userMessage.content,
@@ -400,18 +527,35 @@ class EdgeController(private val context: Context) : AutoCloseable {
             .onFailure { error -> traceError = error }
           status = "Generating..."
         }
-        val response =
-          engine.generate(
-            role = AgentRole.ORCHESTRATOR,
-            prompt = effectivePrompt,
-            imageBytes = listOfNotNull(activeImage?.pngBytes),
-          ) { chunk ->
+        val onChunk: (String) -> Unit = { chunk ->
             chunkCount.incrementAndGet()
             firstChunkAt.compareAndSet(-1L, SystemClock.elapsedRealtime())
             synchronized(partialResponse) { partialResponse.append(chunk) }
             controllerScope.launch(Dispatchers.Main.immediate) {
               updateMessage(assistantId) { it.copy(content = it.content + chunk) }
             }
+          }
+        val response =
+          when (activeBackend) {
+            InferenceBackend.LOCAL ->
+              engine.generate(
+                role = AgentRole.ORCHESTRATOR,
+                prompt = effectivePrompt,
+                imageBytes = listOfNotNull(activeImage?.pngBytes),
+                onChunk = onChunk,
+              )
+            InferenceBackend.GEMINI,
+            InferenceBackend.DEEPSEEK ->
+              remoteApiClient.generate(
+                backend = activeBackend,
+                apiKey = activeApiKey(),
+                model = activeBackendModelLabel(),
+                systemPrompt = systemPrompt,
+                prompt = effectivePrompt,
+                imageBytes = listOfNotNull(activeImage?.pngBytes),
+                settings = settings,
+                onChunk = onChunk,
+              )
           }
         val latencyMs = SystemClock.elapsedRealtime() - startedAt
         activeTrace?.let { trace ->
@@ -439,12 +583,32 @@ class EdgeController(private val context: Context) : AutoCloseable {
               effectivePrompt = effectivePrompt,
               response = response,
             )
+        val completedMessage =
+          messages.firstOrNull { it.id == assistantId }
+            ?.copy(traceId = activeTrace?.traceId ?: spineTraceId)
+        if (completedMessage != null) {
+          updateMessage(assistantId) { completedMessage }
+          persistConversationMessage(completedMessage)
+        }
+        appendSpine(
+          type = SpineRecordType.TRACE,
+          traceId = spineTraceId,
+          payload =
+            buildJsonObject {
+              put("phase", "completed")
+              put("response", response)
+              put("latency_ms", latencyMs)
+              put("chunk_count", chunkCount.get())
+              put("backend", activeBackend.wireValue)
+              put("model", activeBackendModelLabel())
+            },
+        )
         refreshTraceStats()
         status =
           when {
-            traceError != null -> "Ready. Trace capture issue: ${traceError?.message ?: "unknown error"}"
-            activeTrace != null -> "Response saved for review."
-            else -> "Ready."
+            traceError != null -> "Response complete. Runtime Spine issue: ${traceError?.message ?: "unknown error"}"
+            activeTrace != null -> "Response complete."
+            else -> "Response complete."
           }
       } catch (_: CancellationException) {
         conversationStateKnown = false
@@ -476,11 +640,21 @@ class EdgeController(private val context: Context) : AutoCloseable {
             traceError != null -> "Generation stopped. Trace capture issue: ${traceError?.message}"
             else -> "Generation stopped."
           }
+        appendSpine(
+          type = SpineRecordType.FAILURE_TRACE,
+          traceId = spineTraceId,
+          payload =
+            buildJsonObject {
+              put("category", "operator_cancelled")
+              put("partial_response", partial)
+            },
+        )
       } catch (error: Throwable) {
         conversationStateKnown = false
         updateMessage(assistantId) {
           it.copy(role = MessageRole.ERROR, content = error.message ?: "Generation failed.")
         }
+        messages.firstOrNull { it.id == assistantId }?.let { persistConversationMessage(it) }
         val latencyMs = SystemClock.elapsedRealtime() - startedAt
         val partial = synchronized(partialResponse) { partialResponse.toString() }
         activeTrace?.let { trace ->
@@ -509,6 +683,16 @@ class EdgeController(private val context: Context) : AutoCloseable {
               "${error.message ?: "Generation failed."} Trace capture issue: ${traceError?.message}"
             else -> error.message ?: "Generation failed."
           }
+        appendSpine(
+          type = SpineRecordType.FAILURE_TRACE,
+          traceId = spineTraceId,
+          payload =
+            buildJsonObject {
+              put("category", error::class.java.simpleName.ifBlank { "generation_error" })
+              put("message", error.message ?: "Generation failed.")
+              put("partial_response", partial)
+            },
+        )
       } finally {
         context.startService(Intent(context, RunnerForegroundService::class.java).apply { action = "STOP" })
         isBusy = false
@@ -519,6 +703,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
 
   fun cancel() {
     engine.cancel()
+    remoteApiClient.cancel()
   }
 
   fun updateTraceEnabled(enabled: Boolean, scope: CoroutineScope) {
@@ -528,7 +713,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
     }
     traceEnabled = enabled
     preferences.edit().putBoolean(KEY_TRACE_ENABLED, enabled).apply()
-    status = if (enabled) "Trace recording enabled." else "Trace recording disabled."
+    status = if (enabled) "Runtime Spine capture enabled." else "Runtime Spine capture paused."
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
@@ -541,7 +726,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
           }
         }
         .onSuccess { refreshTraceStats() }
-        .onFailure { status = "Trace preference saved, but consent receipt failed: ${it.message}" }
+        .onFailure { status = "Runtime Spine preference saved, but the legacy trace marker failed: ${it.message}" }
     }
   }
 
@@ -555,6 +740,38 @@ class EdgeController(private val context: Context) : AutoCloseable {
       skills.filter { it.id in selectedSkillIds }.sortedBy { it.name.lowercase() }
     return buildContextSnapshot(draftPrompt.trim(), attachedSkills)
   }
+
+  val imageInputAvailable: Boolean
+    get() =
+      when (inferenceBackend) {
+        InferenceBackend.LOCAL -> model != null && engine.capabilities().vision
+        InferenceBackend.GEMINI -> geminiApiKey.isNotBlank()
+        InferenceBackend.DEEPSEEK -> false
+      }
+
+  val inferenceReady: Boolean
+    get() =
+      when (inferenceBackend) {
+        InferenceBackend.LOCAL -> model != null
+        InferenceBackend.GEMINI -> geminiApiKey.isNotBlank()
+        InferenceBackend.DEEPSEEK -> deepSeekApiKey.isNotBlank()
+      }
+
+  val apiConfiguration: ApiProviderConfiguration
+    get() =
+      ApiProviderConfiguration(
+        backend = inferenceBackend,
+        geminiModel = geminiModel,
+        deepSeekModel = deepSeekModel,
+      )
+
+  val activeInferenceLabel: String
+    get() =
+      when (inferenceBackend) {
+        InferenceBackend.LOCAL -> model?.displayName ?: "No on-device model selected"
+        InferenceBackend.GEMINI -> "Gemini API · $geminiModel"
+        InferenceBackend.DEEPSEEK -> "DeepSeek API · $deepSeekModel"
+      }
 
   fun updateContextSettings(nextSettings: ContextSettings) {
     contextSettings = nextSettings.normalized(settings.maxTokens)
@@ -647,7 +864,15 @@ class EdgeController(private val context: Context) : AutoCloseable {
     messages = emptyList()
     pendingImage = null
     resetConversationTracking()
+    activeSessionId = sessionId
     status = "New local conversation."
+    controllerScope.launch {
+      appendSpine(
+        type = SpineRecordType.CONTINUITY_LOG,
+        payload = buildJsonObject { put("action", "conversation_created") },
+      )
+      refreshConversations()
+    }
   }
 
   fun updateModelSettings(
@@ -672,11 +897,9 @@ class EdgeController(private val context: Context) : AutoCloseable {
         withContext(Dispatchers.IO) {
           engine.load(
             role = AgentRole.ORCHESTRATOR,
-            modelPath = current.path,
-            modelName = current.displayName,
-            sizeBytes = current.sizeBytes,
-            systemPrompt = systemPrompt,
-            settings = settings,
+            model = current,
+            systemPrompt = nextSystemPrompt,
+            settings = nextSettings,
           )
         }
         applyModelSettingsState(nextSettings, nextSystemPrompt, nextContextSettings)
@@ -690,9 +913,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
               withContext(Dispatchers.IO) {
                 engine.load(
                   role = AgentRole.ORCHESTRATOR,
-                  modelPath = current.path,
-                  modelName = current.displayName,
-                  sizeBytes = current.sizeBytes,
+                  model = current,
                   systemPrompt = systemPrompt,
                   settings = settings,
                 )
@@ -741,6 +962,24 @@ class EdgeController(private val context: Context) : AutoCloseable {
           )
         }
         updateMessage(messageId) { it.copy(reviewDecision = decision) }
+        val reviewed = messages.firstOrNull { it.id == messageId }
+        if (reviewed != null) persistConversationMessage(reviewed)
+        appendSpine(
+          type = SpineRecordType.CORRECTION_TRACE,
+          traceId = traceId,
+          payload =
+            buildJsonObject {
+              put("decision", decision.wireValue)
+              correctedResponse?.let { put("corrected_response", it) }
+              note?.let { put("note", it) }
+              put(
+                "tags",
+                buildJsonArray {
+                  tags.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                },
+              )
+            },
+        )
         refreshTraceStats()
         status = "Review saved: ${decision.wireValue}."
       } catch (error: Throwable) {
@@ -765,8 +1004,8 @@ class EdgeController(private val context: Context) : AutoCloseable {
               requireNotNull(output) { "Unable to open export destination." }
               when (mode) {
                 ExportMode.RAW -> {
-                  traceLedger.exportRaw(output)
-                  "Exported ${traceLedger.eventCount()} trace events."
+                  output.write(runtimeSpine.exportBytes())
+                  "Exported ${runtimeSpine.read().records.size} Runtime Spine records."
                 }
                 ExportMode.CURATED ->
                   "Exported ${traceLedger.exportCurated(output)} curated training candidates."
@@ -781,12 +1020,49 @@ class EdgeController(private val context: Context) : AutoCloseable {
                       )
                     }
                   }
-                  val replay = traceLedger.exportReplay(output)
+                  val replay =
+                    traceLedger.exportReplay(
+                      output,
+                      extraFiles =
+                        mapOf(
+                          "runtime-spine/runtime-spine.jsonl" to runtimeSpine.exportBytes(),
+                          "runtime-spine/schema.txt" to
+                            "runtime-spine.v1\n".toByteArray(Charsets.UTF_8),
+                        ),
+                      extraArtifacts =
+                        model
+                          ?.visionProjectorPath
+                          ?.let(::File)
+                          ?.takeIf(File::isFile)
+                          ?.let { projector ->
+                            mapOf(
+                              "artifacts/projectors/${projector.name}" to
+                                (projector to model?.visionProjectorSha256)
+                            )
+                          }
+                          .orEmpty(),
+                    )
                   "Replay bundle: ${replay.traceCount} traces, ${replay.artifactCount} artifacts, ${replay.modelCount} model snapshot${if (replay.modelCount == 1) "" else "s"}."
                 }
               }
             }
           }
+        if (mode == ExportMode.CURATED) {
+          appendSpine(
+            type = SpineRecordType.TRAINING_TRACE,
+            payload =
+              buildJsonObject {
+                put("action", "curated_dataset_exported")
+                put("label", "training_candidate_handoff")
+              },
+          )
+        }
+        if (mode == ExportMode.REPLAY) {
+          appendSpine(
+            type = SpineRecordType.PROVENANCE,
+            payload = buildJsonObject { put("action", "replay_pack_exported") },
+          )
+        }
         status = result
       } catch (error: Throwable) {
         status = error.message ?: "Export failed."
@@ -796,7 +1072,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
     }
   }
 
-  fun deleteTraces(scope: CoroutineScope) {
+  fun archiveTraces(scope: CoroutineScope) {
     if (isBusy) {
       status = "Wait for the current operation to finish."
       return
@@ -804,15 +1080,24 @@ class EdgeController(private val context: Context) : AutoCloseable {
     isBusy = true
     scope.launch {
       try {
-        val deleted = withContext(Dispatchers.IO) { traceLedger.deleteAll() }
-        if (deleted) {
-          messages = messages.map { it.copy(traceId = null, reviewDecision = null) }
-          refreshTraceStats()
-          lastTraceId = null
-          status = "Local traces deleted."
-        } else {
-          status = "Could not delete local traces."
-        }
+        val archiveName =
+          withContext(Dispatchers.IO) {
+            val archive = File(traceRoot, "archive/${System.currentTimeMillis()}").apply { mkdirs() }
+            val events = File(traceRoot, "trace_events.jsonl")
+            val artifacts = File(traceRoot, "artifacts")
+            if (events.exists()) {
+              java.nio.file.Files.move(events.toPath(), File(archive, events.name).toPath())
+            }
+            if (artifacts.exists()) {
+              java.nio.file.Files.move(artifacts.toPath(), File(archive, artifacts.name).toPath())
+            }
+            runtimeSpine.archive()
+            archive.name
+          }
+        refreshTraceStats()
+        refreshRuntimeSpine()
+        lastTraceId = null
+        status = "Runtime records archived locally in $archiveName."
       } finally {
         isBusy = false
       }
@@ -978,8 +1263,8 @@ class EdgeController(private val context: Context) : AutoCloseable {
       temperature = settings.temperature,
       imageInputEnabled = settings.imageInputEnabled,
       appVersion = BuildConfig.VERSION_NAME,
-      runtimeName = "litertlm-android",
-      runtimeVersion = BuildConfig.LITERT_LM_VERSION,
+      runtimeName = engine.metadata()?.runtimeName ?: activeModel.runtimeType.name.lowercase(),
+      runtimeVersion = engine.metadata()?.runtimeVersion ?: "unknown",
       backend = "cpu",
       skillArtifacts = skillArtifacts,
       imageArtifacts = imageArtifacts,
@@ -1031,6 +1316,75 @@ class EdgeController(private val context: Context) : AutoCloseable {
     traceStats = withContext(Dispatchers.IO) { traceLedger.stats() }
   }
 
+  private suspend fun persistConversationMessage(message: UiMessage) {
+    withContext(Dispatchers.IO) {
+      conversationLedger.saveMessage(message, sessionId)
+      conversationLedger.upsertConversation(
+        sessionId = sessionId,
+        messages = messages,
+        runtimeType = inferenceBackend.name,
+        modelName = activeBackendModelLabel(),
+      )
+    }
+    appendSpine(
+      type = SpineRecordType.CONTINUITY_LOG,
+      traceId = message.traceId,
+      payload =
+        buildJsonObject {
+          put("action", "message_saved")
+          put("message_id", message.id)
+          put("role", message.role.name.lowercase())
+          put("content", message.content)
+          put("has_image", message.image != null)
+          message.image?.let {
+            put("image_sha256", it.sha256)
+            put("image_name", it.displayName)
+          }
+        },
+    )
+    refreshConversations()
+  }
+
+  private suspend fun refreshConversations() {
+    conversations = withContext(Dispatchers.IO) { conversationLedger.getConversations() }
+    sessionIds = conversations.map(ConversationEntity::id)
+  }
+
+  suspend fun refreshRuntimeSpine() {
+    spineReadResult = withContext(Dispatchers.IO) { runtimeSpine.read() }
+  }
+
+  private suspend fun appendSpine(
+    type: SpineRecordType,
+    payload: kotlinx.serialization.json.JsonObject,
+    traceId: String? = null,
+  ) {
+    if (!traceEnabled) return
+    val activeModel = model
+    withContext(Dispatchers.IO) {
+      runtimeSpine.append(
+        type = type,
+        sessionId = sessionId,
+        traceId = traceId,
+        payload = payload,
+        provenance =
+          buildJsonObject {
+            put("app_version", BuildConfig.VERSION_NAME)
+            put("runtime", inferenceBackend.wireValue)
+            put("model_name", activeBackendModelLabel())
+            if (inferenceBackend == InferenceBackend.LOCAL) {
+              engine.metadata()?.runtimeVersion?.let { put("runtime_version", it) }
+              activeModel?.let {
+                put("model_sha256", it.sha256)
+                put("model_type", it.runtimeType.name.lowercase())
+              }
+            }
+          },
+      )
+    }
+    spineReadResult = withContext(Dispatchers.IO) { runtimeSpine.read() }
+  }
+
   private fun resetConversationTracking() {
     conversationTurns = emptyList()
     compressedMessageIds = emptySet()
@@ -1046,14 +1400,27 @@ class EdgeController(private val context: Context) : AutoCloseable {
     withContext(Dispatchers.IO) {
       engine.load(
         role = AgentRole.ORCHESTRATOR,
-        modelPath = descriptor.path,
-        modelName = descriptor.displayName,
-        sizeBytes = descriptor.sizeBytes,
+        model = descriptor,
         systemPrompt = systemPrompt,
         settings = settings,
       )
     }
-    status = "Ready."
+    val runtimeMetadata = engine.metadata()
+    appendSpine(
+      type = SpineRecordType.PROVENANCE,
+      payload =
+        buildJsonObject {
+          put("action", "model_loaded")
+          put("model_name", descriptor.displayName)
+          put("model_sha256", descriptor.sha256)
+          put("runtime", runtimeMetadata?.runtimeName ?: descriptor.runtimeType.name)
+          put("runtime_version", runtimeMetadata?.runtimeVersion ?: "unknown")
+          descriptor.visionProjectorSha256?.let { put("projector_sha256", it) }
+          descriptor.sourceRepository?.let { put("source_repository", it) }
+          descriptor.sourceRevision?.let { put("source_revision", it) }
+        },
+    )
+    status = "${descriptor.displayName} loaded."
   }
 
   private fun updateMessage(id: String, transform: (UiMessage) -> UiMessage) {
@@ -1163,17 +1530,116 @@ class EdgeController(private val context: Context) : AutoCloseable {
   override fun close() {
     controllerScope.cancel()
     engine.close()
+    remoteApiClient.cancel()
   }
 
   fun updateHfToken(token: String) {
-    hfToken = token
-    securePreferences.edit().putString("hf_token", token).apply()
+    val normalized = token.trim()
+    if (securePreferences.edit().putString("hf_token", normalized).commit()) {
+      hfToken = normalized
+      status =
+        if (normalized.isEmpty()) {
+          "Hugging Face access token removed."
+        } else {
+          "Hugging Face access token saved securely on this device."
+        }
+    } else {
+      status = "Hugging Face access token could not be saved."
+    }
   }
 
   fun updateGeminiApiKey(key: String) {
-    geminiApiKey = key
-    securePreferences.edit().putString("gemini_api_key", key).apply()
+    updateApiProviders(apiConfiguration, key, deepSeekApiKey)
   }
+
+  fun updateApiProviders(
+    configuration: ApiProviderConfiguration,
+    nextGeminiApiKey: String,
+    nextDeepSeekApiKey: String,
+  ): Boolean {
+    if (isBusy) {
+      status = "Wait for the current operation to finish."
+      return false
+    }
+    val normalizedGemini = nextGeminiApiKey.trim()
+    val normalizedDeepSeek = nextDeepSeekApiKey.trim()
+    val normalizedGeminiModel = configuration.geminiModel.trim()
+    val normalizedDeepSeekModel = configuration.deepSeekModel.trim()
+    if (!normalizedGeminiModel.matches(API_MODEL_ID) || !normalizedDeepSeekModel.matches(API_MODEL_ID)) {
+      status = "Use a valid API model ID."
+      return false
+    }
+    if (configuration.backend == InferenceBackend.GEMINI && normalizedGemini.isEmpty()) {
+      status = "Save a Gemini API key before selecting Gemini."
+      return false
+    }
+    if (configuration.backend == InferenceBackend.DEEPSEEK && normalizedDeepSeek.isEmpty()) {
+      status = "Save a DeepSeek API key before selecting DeepSeek."
+      return false
+    }
+    val credentialsSaved =
+      securePreferences
+        .edit()
+        .putString("gemini_api_key", normalizedGemini)
+        .putString("deepseek_api_key", normalizedDeepSeek)
+        .commit()
+    if (!credentialsSaved) {
+      status = "API credentials could not be saved."
+      return false
+    }
+    val settingsSaved =
+      preferences
+        .edit()
+        .putString(KEY_INFERENCE_BACKEND, configuration.backend.wireValue)
+        .putString(KEY_GEMINI_MODEL, normalizedGeminiModel)
+        .putString(KEY_DEEPSEEK_MODEL, normalizedDeepSeekModel)
+        .commit()
+    if (!settingsSaved) {
+      status = "API credentials were secured, but provider settings could not be saved."
+      return false
+    }
+    geminiApiKey = normalizedGemini
+    deepSeekApiKey = normalizedDeepSeek
+    geminiModel = normalizedGeminiModel
+    deepSeekModel = normalizedDeepSeekModel
+    inferenceBackend = configuration.backend
+    pendingImage = null
+    messages = emptyList()
+    resetConversationTracking()
+    activeSessionId = sessionId
+    status = "${configuration.backend.label} selected."
+    controllerScope.launch {
+      appendSpine(
+        type = SpineRecordType.PROVENANCE,
+        payload =
+          buildJsonObject {
+            put("action", "inference_backend_selected")
+            put("backend", configuration.backend.wireValue)
+            put("model", activeBackendModelLabel())
+          },
+      )
+    }
+    return true
+  }
+
+  private fun persistInferenceBackend(backend: InferenceBackend) {
+    inferenceBackend = backend
+    preferences.edit().putString(KEY_INFERENCE_BACKEND, backend.wireValue).apply()
+  }
+
+  private fun activeApiKey(): String =
+    when (inferenceBackend) {
+      InferenceBackend.GEMINI -> geminiApiKey
+      InferenceBackend.DEEPSEEK -> deepSeekApiKey
+      InferenceBackend.LOCAL -> ""
+    }
+
+  private fun activeBackendModelLabel(): String =
+    when (inferenceBackend) {
+      InferenceBackend.LOCAL -> model?.displayName ?: "unloaded"
+      InferenceBackend.GEMINI -> geminiModel
+      InferenceBackend.DEEPSEEK -> deepSeekModel
+    }
 
   private fun loadGenerationSettings(): GenerationSettings =
     GenerationSettings(
@@ -1193,7 +1659,72 @@ class EdgeController(private val context: Context) : AutoCloseable {
       .normalized(settings.maxTokens)
 
   fun loadConversation(id: String) {
-    activeSessionId = id
+    if (isBusy || id == sessionId) return
+    controllerScope.launch {
+      isBusy = true
+      status = "Loading conversation..."
+      try {
+        val restored = withContext(Dispatchers.IO) { conversationLedger.loadMessagesForSession(id) }
+        messages = restored
+        sessionId = id
+        activeSessionId = id
+        pendingImage = null
+        compressedMessageIds = emptySet()
+        contextCompressionOperations = emptyList()
+        nextTurnIndex = restored.count { it.role == MessageRole.USER }
+        lastTraceId = restored.lastOrNull { it.traceId != null }?.traceId
+        conversationTurns =
+          restored
+            .chunked(2)
+            .mapIndexedNotNull { index, pair ->
+              val user = pair.getOrNull(0)?.takeIf { it.role == MessageRole.USER } ?: return@mapIndexedNotNull null
+              val assistant = pair.getOrNull(1)?.takeIf { it.role == MessageRole.ASSISTANT } ?: return@mapIndexedNotNull null
+              ConversationTurn(index, user.content, assistant.content)
+            }
+        engine.resetAllConversations()
+        appendSpine(
+          type = SpineRecordType.CONTINUITY_LOG,
+          payload =
+            buildJsonObject {
+              put("action", "conversation_loaded")
+              put("message_count", restored.size)
+            },
+        )
+        status = "Conversation restored."
+      } catch (error: Throwable) {
+        status = error.message ?: "Conversation could not be restored."
+      } finally {
+        isBusy = false
+      }
+    }
+  }
+
+  fun archiveConversation(id: String) {
+    if (isBusy) return
+    controllerScope.launch {
+      withContext(Dispatchers.IO) { conversationLedger.archive(id) }
+      appendSpine(
+        type = SpineRecordType.CONTINUITY_LOG,
+        payload =
+          buildJsonObject {
+            put("action", "conversation_archived")
+            put("conversation_id", id)
+          },
+      )
+      if (id == sessionId) newConversation()
+      refreshConversations()
+    }
+  }
+
+  fun archiveRuntimeSpine() {
+    if (isBusy) return
+    controllerScope.launch {
+      val archived = withContext(Dispatchers.IO) { runtimeSpine.archive() }
+      status =
+        if (archived == null) "Runtime Spine is empty."
+        else "Runtime Spine archived locally as ${archived.name}."
+      refreshRuntimeSpine()
+    }
   }
 
   fun getSystemPrompt(role: AgentRole): String {
@@ -1247,6 +1778,7 @@ class EdgeController(private val context: Context) : AutoCloseable {
   private companion object {
     const val DEFAULT_SYSTEM_PROMPT = "You are a concise, helpful on-device assistant."
     const val KEY_TRACE_ENABLED = "trace_enabled"
+    const val KEY_SPINE_DEFAULT_APPLIED = "runtime_spine_default_v1"
     const val KEY_SKILLS_SEEDED = "skills_seeded_v1"
     const val KEY_SELECTED_SKILLS = "selected_skill_ids"
     const val KEY_THEME_MODE = "theme_mode"
@@ -1259,5 +1791,11 @@ class EdgeController(private val context: Context) : AutoCloseable {
     const val KEY_CONTEXT_MODE = "context_mode"
     const val KEY_CONTEXT_THRESHOLD = "context_threshold"
     const val KEY_CONTEXT_RESERVE = "context_reserve"
+    const val KEY_INFERENCE_BACKEND = "inference_backend"
+    const val KEY_GEMINI_MODEL = "gemini_model"
+    const val KEY_DEEPSEEK_MODEL = "deepseek_model"
+    const val DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+    const val DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+    val API_MODEL_ID = Regex("[A-Za-z0-9._:/-]{1,160}")
   }
 }

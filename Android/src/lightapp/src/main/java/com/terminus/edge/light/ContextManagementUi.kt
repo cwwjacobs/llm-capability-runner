@@ -29,10 +29,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,9 +38,6 @@ import androidx.compose.ui.unit.dp
 import com.terminus.edge.light.context.ContextEntryView
 import com.terminus.edge.light.context.ContextSnapshot
 import com.terminus.edge.light.context.RetentionPolicy
-import com.terminus.edge.light.context.ContextMode
-import com.terminus.edge.light.context.ContextSettings
-import com.terminus.edge.light.inference.GenerationSettings
 import java.text.DecimalFormat
 
 @Composable
@@ -55,57 +48,69 @@ internal fun ContextMeter(
 ) {
   val pressureColor = contextPressureColor(snapshot.usage.percentage)
   val borderColor =
-    if (snapshot.usage.percentage >= 90) pressureColor else EdgeLightPalette.Gold
+    when {
+      snapshot.usage.percentage >= 90 -> pressureColor
+      snapshot.usage.percentage >= 80 -> EdgeLightPalette.Gold
+      else -> EdgeLightPalette.DeepPurple
+    }
   val fraction =
     (snapshot.usage.estimatedTokens.toFloat() / snapshot.usage.totalTokens.coerceAtLeast(1))
       .coerceIn(0f, 1f)
   Column(
     modifier =
       modifier
-        .border(1.dp, borderColor, RoundedCornerShape(5.dp))
+        .background(EdgeLightPalette.SurfaceBlack, RoundedCornerShape(14.dp))
+        .border(1.dp, borderColor.copy(alpha = 0.8f), RoundedCornerShape(14.dp))
         .clickable(onClick = onClick)
-        .padding(horizontal = 8.dp, vertical = 6.dp),
-    verticalArrangement = Arrangement.spacedBy(4.dp),
+        .padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically
+      verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "Context Usage",
-        color = borderColor,
-        fontWeight = FontWeight.Bold,
+        text = "Context",
+        color = MaterialTheme.colorScheme.onSurface,
+        fontWeight = FontWeight.SemiBold,
         style = MaterialTheme.typography.labelMedium,
       )
       Text(
         text = "${snapshot.usage.percentage}%",
-        color = pressureColor,
-        fontWeight = FontWeight.Bold,
-        style = MaterialTheme.typography.labelMedium,
+        color = if (snapshot.usage.percentage >= 80) borderColor else EdgeLightPalette.Cyan,
+        style = MaterialTheme.typography.labelSmall,
       )
     }
-    LinearProgressIndicator(
-      progress = { fraction },
-      modifier = Modifier.fillMaxWidth().height(8.dp),
-      color = pressureColor,
-      trackColor = MaterialTheme.colorScheme.surfaceVariant,
-    )
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween
+    Box(
+      modifier =
+        Modifier.fillMaxWidth().height(5.dp)
+          .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50)),
     ) {
-      Text(
-        text = "${compactNumber(snapshot.usage.estimatedTokens)} Used",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        style = MaterialTheme.typography.labelSmall,
-      )
-      Text(
-        text = "${compactNumber(snapshot.usage.totalTokens)} Max",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        style = MaterialTheme.typography.labelSmall,
+      Box(
+        modifier =
+          Modifier.fillMaxWidth(fraction).height(5.dp)
+            .background(
+              if (snapshot.usage.percentage >= 90) {
+                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                  listOf(EdgeLightPalette.Gold, pressureColor)
+                )
+              } else {
+                EdgeLightPalette.Gradient
+              },
+              RoundedCornerShape(50),
+            ),
       )
     }
+    Text(
+      text =
+        "~${compactNumber(snapshot.usage.estimatedTokens)} / " +
+          "${compactNumber(snapshot.usage.totalTokens)} tokens · " +
+          "${compactNumber(snapshot.usage.characters)} chars",
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+      style = MaterialTheme.typography.labelSmall,
+    )
   }
 }
 
@@ -139,165 +144,84 @@ internal fun ContextPressureNotice(
 @Composable
 internal fun ContextManagerSheet(
   snapshot: ContextSnapshot,
-  settings: GenerationSettings,
-  contextSettings: ContextSettings,
-  systemPrompt: String,
-  isBusy: Boolean,
   onDismiss: () -> Unit,
   onPolicyChange: (String, RetentionPolicy) -> Unit,
   onCompress: () -> Unit,
   onRestore: () -> Unit,
   onClearTemporary: () -> Unit,
   onNewConversation: () -> Unit,
-  onApplyModelSettings: (GenerationSettings, String) -> Unit,
-  onApplyContextSettings: (ContextSettings) -> Unit,
 ) {
-  var maxTokens by remember(settings) { mutableStateOf(settings.maxTokens.toString()) }
-  var topK by remember(settings) { mutableStateOf(settings.topK.toString()) }
-  var topP by remember(settings) { mutableStateOf(settings.topP.toString()) }
-  var temperature by remember(settings) { mutableStateOf(settings.temperature.toString()) }
-  var imageInputEnabled by remember(settings) { mutableStateOf(settings.imageInputEnabled) }
-  var prompt by remember(systemPrompt) { mutableStateOf(systemPrompt) }
-  var contextMode by remember(contextSettings) { mutableStateOf(contextSettings.mode) }
-  var contextThreshold by remember(contextSettings) { mutableStateOf(contextSettings.compressionThresholdPercent.toString()) }
-  var contextReserve by remember(contextSettings) { mutableStateOf(contextSettings.reservedOutputTokens.toString()) }
-
-  val parsedSettings =
-    GenerationSettings(
-      maxTokens = maxTokens.toIntOrNull() ?: -1,
-      topK = topK.toIntOrNull() ?: -1,
-      topP = topP.toDoubleOrNull() ?: -1.0,
-      temperature = temperature.toDoubleOrNull() ?: -1.0,
-      imageInputEnabled = imageInputEnabled,
-    )
-  val parsedContextSettings =
-    ContextSettings(
-      mode = contextMode,
-      compressionThresholdPercent = contextThreshold.toIntOrNull() ?: -1,
-      reservedOutputTokens = contextReserve.toIntOrNull() ?: -1,
-    )
-
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   ModalBottomSheet(
-    onDismissRequest = {
-      onApplyModelSettings(parsedSettings, prompt)
-      onApplyContextSettings(parsedContextSettings)
-      onDismiss()
-    },
+    onDismissRequest = onDismiss,
     sheetState = sheetState,
   ) {
-    LazyColumn(
+    Column(
       modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      item {
-        Text(
-          "Context Manager",
-          color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.SemiBold,
-          style = MaterialTheme.typography.titleLarge,
-        )
-      }
-      
-      item {
-        AccordionMenu("Customize Model Settings") {
-          SliderSettingField("Max Tokens", maxTokens, 256f..32768f) { maxTokens = it }
-          SliderSettingField("Top K", topK, 1f..1024f) { topK = it }
-          SliderSettingField("Top P", topP, 0.0f..1.0f, decimal = true) { topP = it }
-          SliderSettingField("Temperature", temperature, 0.0f..2.0f, decimal = true) { temperature = it }
-          
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Text("Enable Image Input")
-            TraceRecordingSwitch(
-              checked = imageInputEnabled,
-              onCheckedChange = { imageInputEnabled = it },
-              enabled = !isBusy,
-            )
+      Text(
+        "Context Manager",
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+        style = MaterialTheme.typography.titleLarge,
+      )
+      Text(
+        "${snapshot.usage.characters} characters · ~${snapshot.usage.estimatedTokens} / " +
+          "${snapshot.usage.totalTokens} tokens · ${snapshot.usage.percentage}%",
+        color = contextPressureColor(snapshot.usage.percentage),
+        style = MaterialTheme.typography.bodyMedium,
+      )
+      Text(
+        "${snapshot.settings.mode.label} mode · ${snapshot.usage.reservedOutputTokens} tokens " +
+          "reserved for output · estimates use 4 characters per token",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.labelSmall,
+      )
+      LinearProgressIndicator(
+        progress = {
+          (snapshot.usage.estimatedTokens.toFloat() /
+              snapshot.usage.totalTokens.coerceAtLeast(1))
+            .coerceIn(0f, 1f)
+        },
+        modifier = Modifier.fillMaxWidth().height(7.dp),
+        color = contextPressureColor(snapshot.usage.percentage),
+        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        GradientPillButton(text = "Compress", onClick = onCompress)
+        OutlinedButton(onClick = onRestore, enabled = snapshot.compressedEntryIds.isNotEmpty()) {
+          Text("Restore")
+        }
+        OutlinedButton(onClick = onClearTemporary) { Text("Clear temp") }
+        OutlinedButton(
+          onClick = {
+            onNewConversation()
+            onDismiss()
           }
-
-          NumericSettingField(
-            label = "System Prompt",
-            value = prompt,
-            onValueChange = { prompt = it },
-            decimal = false
-          )
+        ) {
+          Text("New chat")
         }
       }
-
-      item {
-        AccordionMenu("Context Management") {
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ContextMode.entries.forEach { mode ->
-              if (mode == contextMode) {
-                GradientPillButton(text = mode.name.lowercase().replaceFirstChar(Char::uppercase), onClick = {})
-              } else {
-                OutlinedButton(onClick = { contextMode = mode }) {
-                  Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))
-                }
-              }
-            }
-          }
-          if (contextMode == ContextMode.AUTOMATIC) {
-            SliderSettingField("Compression Threshold (%)", contextThreshold, 50f..90f) { contextThreshold = it }
-          }
-          SliderSettingField("Reserved Output Tokens", contextReserve, 128f..16384f) { contextReserve = it }
-
-          Spacer(Modifier.height(8.dp))
-          Text(
-            "${snapshot.usage.characters} characters · ~${snapshot.usage.estimatedTokens} / " +
-              "${snapshot.usage.totalTokens} tokens · ${snapshot.usage.percentage}%",
-            color = contextPressureColor(snapshot.usage.percentage),
-            style = MaterialTheme.typography.bodyMedium,
-          )
-          LinearProgressIndicator(
-            progress = {
-              (snapshot.usage.estimatedTokens.toFloat() /
-                  snapshot.usage.totalTokens.coerceAtLeast(1))
-                .coerceIn(0f, 1f)
-            },
-            modifier = Modifier.fillMaxWidth().height(7.dp),
-            color = contextPressureColor(snapshot.usage.percentage),
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-          )
-          
-          Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            GradientPillButton(text = "Compress", onClick = onCompress)
-            OutlinedButton(onClick = onRestore, enabled = snapshot.compressedEntryIds.isNotEmpty()) { Text("Restore") }
-            OutlinedButton(onClick = onClearTemporary) { Text("Clear temp") }
-            OutlinedButton(
-              onClick = {
-                onApplyModelSettings(parsedSettings, prompt)
-                onApplyContextSettings(parsedContextSettings)
-                onNewConversation()
-                onDismiss()
-              }
-            ) {
-              Text("New chat")
-            }
-          }
+      Text(
+        "Pinned and retained entries are protected from automatic compression. Originals remain " +
+          "visible and recoverable after density compression.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall,
+      )
+      HorizontalDivider()
+      LazyColumn(
+        modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(snapshot.entries, key = ContextEntryView::id) { entry ->
+          ContextEntryRow(entry = entry, onPolicyChange = onPolicyChange)
         }
+        item { Spacer(Modifier.height(20.dp)) }
       }
-      
-      item {
-        Text(
-          "Pinned and retained entries are protected from automatic compression. Originals remain " +
-            "visible and recoverable after density compression.",
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          style = MaterialTheme.typography.bodySmall,
-        )
-      }
-      
-      items(snapshot.entries, key = ContextEntryView::id) { entry ->
-        ContextEntryRow(entry = entry, onPolicyChange = onPolicyChange)
-      }
-      item { Spacer(Modifier.height(20.dp)) }
     }
   }
 }
@@ -380,13 +304,12 @@ private fun ContextEntryRow(
 
 private fun contextPressureColor(percentage: Int): Color =
   when {
-    percentage >= 80 -> Color(0xFFFF4D5E)
-    percentage >= 50 -> EdgeLightPalette.Gold
+    percentage >= 90 -> Color(0xFFFF4D5E)
+    percentage >= 80 -> EdgeLightPalette.Gold
     else -> EdgeLightPalette.Cyan
   }
 
-private fun compactNumber(number: Int): String {
-  if (number < 1000) return number.toString()
-  val exp = (Math.log10(number.toDouble()) / 3).toInt()
-  return String.format("%.1f%c", number / Math.pow(1000.0, exp.toDouble()), "kMGTPE"[exp - 1])
+private fun compactNumber(value: Int): String {
+  if (value < 1000) return value.toString()
+  return "${DecimalFormat("0.#").format(value / 1000.0)}K"
 }

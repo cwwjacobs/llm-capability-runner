@@ -35,17 +35,17 @@ enum class EdgeThemeMode(val wireValue: String) {
 }
 
 object EdgeLightPalette {
-  val ShellBlack = Color(0xFF000000)
-  val ChatBlack = Color(0xFF070709)
-  val SurfaceBlack = Color(0xFF0D0714)
-  val RaisedBlack = Color(0xFF1A1D22)
-  val HotPink = Color(0xFFFF35D3)
-  val Purple = Color(0xFF9147FF)
-  val DeepPurple = Color(0xFF5A2CA0)
-  val Gold = Color(0xFFFFD85A)
-  val Cyan = Color(0xFF35D7E8)
-  val Muted = Color(0xFFA7A1AD)
-  val Gradient = Brush.horizontalGradient(listOf(Color(0xFFED35C3), Color(0xFF8B43F2)))
+  val ShellBlack = Color(0xFF0B0910)
+  val ChatBlack = Color(0xFF08070C)
+  val SurfaceBlack = Color(0xFF17121D)
+  val RaisedBlack = Color(0xFF211829)
+  val HotPink = Color(0xFFFF3EB5)
+  val Purple = Color(0xFF6D36FF)
+  val DeepPurple = Color(0xFF4B2396)
+  val Gold = Color(0xFFD4AF57)
+  val Cyan = Color(0xFF55DDEC)
+  val Muted = Color(0xFFAAA2B3)
+  val Gradient = Brush.horizontalGradient(listOf(HotPink, Purple))
 }
 
 val LocalEdgeThemeMode = staticCompositionLocalOf { EdgeThemeMode.DEFAULT }
@@ -54,19 +54,19 @@ private val DefaultColors =
   darkColorScheme(
     primary = EdgeLightPalette.HotPink,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFF35142F),
-    onPrimaryContainer = EdgeLightPalette.Gold,
+    primaryContainer = Color(0xFF37132F),
+    onPrimaryContainer = Color(0xFFFFC8ED),
     secondary = EdgeLightPalette.Purple,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFF231832),
-    onSecondaryContainer = EdgeLightPalette.Gold,
+    secondaryContainer = Color(0xFF271746),
+    onSecondaryContainer = Color(0xFFE5D9FF),
     background = EdgeLightPalette.ShellBlack,
     onBackground = Color(0xFFF4EFF7),
     surface = EdgeLightPalette.SurfaceBlack,
     onSurface = Color(0xFFF4EFF7),
     surfaceVariant = EdgeLightPalette.RaisedBlack,
     onSurfaceVariant = EdgeLightPalette.Muted,
-    outline = EdgeLightPalette.DeepPurple,
+    outline = EdgeLightPalette.Gold.copy(alpha = 0.62f),
     error = Color(0xFFFF6B76),
     errorContainer = Color(0xFF3B1118),
   )

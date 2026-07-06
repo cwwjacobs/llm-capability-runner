@@ -1,1 +1,17 @@
 .DS_Store
+Thumbs.db
+Zone.Identifier
+__pycache__/
+*.py[cod]
+
+.codex/
+.agents/
+.env
+.env.*
+
+local.properties
+.gradle/
+build/
+**/build/
+**/.cxx/
+**/.externalNativeBuild/

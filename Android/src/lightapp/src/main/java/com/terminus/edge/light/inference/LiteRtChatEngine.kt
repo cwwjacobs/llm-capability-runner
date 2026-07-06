@@ -15,6 +15,9 @@ import java.util.concurrent.CancellationException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.terminus.edge.light.model.ModelDescriptor
+import com.terminus.edge.light.model.ModelRuntimeType
+import com.terminus.edge.light.BuildConfig
 
 data class GenerationSettings(
   val maxTokens: Int = 4000,
@@ -24,18 +27,27 @@ data class GenerationSettings(
   val imageInputEnabled: Boolean = false,
 )
 
-class LiteRtChatEngine(private val context: Context) : AutoCloseable {
+class LiteRtChatEngine(private val context: Context) : LocalModelRuntime {
   private var engine: Engine? = null
   private var conversation: Conversation? = null
   private var activeSettings: GenerationSettings? = null
   private var activeSystemPrompt: String = ""
 
-  fun load(modelPath: String, systemPrompt: String, settings: GenerationSettings) {
+  override var capabilities = RuntimeCapabilities(vision = false)
+    private set
+  override val metadata =
+    RuntimeMetadata(
+      runtimeType = ModelRuntimeType.LITERT_LM,
+      runtimeName = "litertlm-android",
+      runtimeVersion = BuildConfig.LITERT_LM_VERSION,
+    )
+
+  override fun load(model: ModelDescriptor, systemPrompt: String, settings: GenerationSettings) {
     close()
     val nextEngine =
       Engine(
         EngineConfig(
-          modelPath = modelPath,
+          modelPath = model.path,
           backend = Backend.CPU(),
           visionBackend = if (settings.imageInputEnabled) Backend.GPU() else null,
           maxNumTokens = settings.maxTokens,
@@ -48,6 +60,7 @@ class LiteRtChatEngine(private val context: Context) : AutoCloseable {
       engine = nextEngine
       activeSettings = settings
       activeSystemPrompt = systemPrompt
+      capabilities = RuntimeCapabilities(vision = settings.imageInputEnabled)
       resetConversation()
     } catch (error: Throwable) {
       runCatching { nextEngine.close() }
@@ -58,7 +71,7 @@ class LiteRtChatEngine(private val context: Context) : AutoCloseable {
     }
   }
 
-  fun resetConversation() {
+  override fun resetConversation() {
     val activeEngine = engine ?: error("Import a model first.")
     val settings = activeSettings ?: error("Model settings are unavailable.")
     runCatching { conversation?.close() }
@@ -80,9 +93,9 @@ class LiteRtChatEngine(private val context: Context) : AutoCloseable {
       )
   }
 
-  suspend fun generate(
+  override suspend fun generate(
     prompt: String,
-    imageBytes: List<ByteArray> = emptyList(),
+    imageBytes: List<ByteArray>,
     onChunk: (String) -> Unit,
   ): String =
     suspendCancellableCoroutine { continuation ->
@@ -134,7 +147,7 @@ class LiteRtChatEngine(private val context: Context) : AutoCloseable {
       )
     }
 
-  fun cancel() {
+  override fun cancel() {
     conversation?.cancelProcess()
   }
 

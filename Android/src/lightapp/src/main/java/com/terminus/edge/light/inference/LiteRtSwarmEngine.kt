@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
+import com.terminus.edge.light.model.ModelDescriptor
+import com.terminus.edge.light.model.ModelRuntimeType
 
 enum class AgentRole {
   ORCHESTRATOR,
@@ -31,7 +33,7 @@ data class AgentState(
 )
 
 class LiteRtSwarmEngine(private val context: Context) : AutoCloseable {
-  private val engines = ConcurrentHashMap<AgentRole, LiteRtChatEngine>()
+  private val engines = ConcurrentHashMap<AgentRole, LocalModelRuntime>()
   private val _agentStates = MutableStateFlow<Map<AgentRole, AgentState>>(emptyMap())
   val agentStates: StateFlow<Map<AgentRole, AgentState>> = _agentStates.asStateFlow()
   
@@ -44,11 +46,26 @@ class LiteRtSwarmEngine(private val context: Context) : AutoCloseable {
     }
   }
 
-  fun load(role: AgentRole, modelPath: String, modelName: String, sizeBytes: Long, systemPrompt: String, settings: GenerationSettings) {
-    updateState(role) { it.copy(status = AgentStatus.LOADING, modelName = modelName, sizeBytes = sizeBytes) }
+  fun load(role: AgentRole, model: ModelDescriptor, systemPrompt: String, settings: GenerationSettings) {
+    updateState(role) { it.copy(status = AgentStatus.LOADING, modelName = model.displayName, sizeBytes = model.sizeBytes) }
     try {
-      val engine = engines.getOrPut(role) { LiteRtChatEngine(context) }
-      engine.load(modelPath, systemPrompt, settings)
+      val expectedClass =
+        when (model.runtimeType) {
+          ModelRuntimeType.LITERT_LM -> LiteRtChatEngine::class
+          ModelRuntimeType.GGUF -> GgufRuntime::class
+        }
+      val existing = engines[role]
+      val engine =
+        if (existing != null && existing::class == expectedClass) {
+          existing
+        } else {
+          existing?.close()
+          when (model.runtimeType) {
+            ModelRuntimeType.LITERT_LM -> LiteRtChatEngine(context)
+            ModelRuntimeType.GGUF -> GgufRuntime(context)
+          }.also { engines[role] = it }
+        }
+      engine.load(model, systemPrompt, settings)
       updateState(role) { it.copy(status = AgentStatus.IDLE) }
     } catch (e: Throwable) {
       updateState(role) { it.copy(status = AgentStatus.ERROR) }
@@ -69,6 +86,12 @@ class LiteRtSwarmEngine(private val context: Context) : AutoCloseable {
   fun resetAllConversations() {
     engines.values.forEach { it.resetConversation() }
   }
+
+  fun capabilities(role: AgentRole = AgentRole.ORCHESTRATOR): RuntimeCapabilities =
+    engines[role]?.capabilities ?: RuntimeCapabilities(vision = false)
+
+  fun metadata(role: AgentRole = AgentRole.ORCHESTRATOR): RuntimeMetadata? =
+    engines[role]?.metadata
 
   suspend fun generate(
     role: AgentRole,

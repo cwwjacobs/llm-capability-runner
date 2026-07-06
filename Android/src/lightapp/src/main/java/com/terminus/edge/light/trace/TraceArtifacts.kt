@@ -93,7 +93,8 @@ class TraceArtifactStore(private val root: File) {
     require(source.isFile && source.length() == model.sizeBytes) {
       "The active model file is unavailable or changed."
     }
-    val relativePath = "models/${model.sha256}.litertlm"
+    val extension = File(model.path).extension.lowercase().ifBlank { "bin" }
+    val relativePath = "models/${model.sha256}.$extension"
     val target = resolveStoragePath(relativePath)
     verifyHashOnce(source, model.sha256, "The active model SHA-256 does not match its descriptor.")
     if (!target.exists()) {
