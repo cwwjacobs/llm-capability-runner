@@ -12,6 +12,9 @@ class HuggingFaceClientTest {
     assertTrue(HuggingFaceClient.isCompatibleModelFile("GEMMA.LITERTLM"))
     assertTrue(HuggingFaceClient.isCompatibleModelFile("gemma-q4_k_m.gguf"))
     assertTrue(HuggingFaceClient.isCompatibleModelFile("mmproj-model.gguf"))
+    assertFalse(HfModelFile("mmproj-model.gguf", 200L * 1024L * 1024L).isPrimaryChoice)
+    assertFalse(HfModelFile("vision-encoder.gguf", 200L * 1024L * 1024L).isPrimaryChoice)
+    assertFalse(HfModelFile("tiny.gguf", 37L * 1024L * 1024L).isPrimaryChoice)
     assertFalse(HuggingFaceClient.isCompatibleModelFile("pytorch_model.bin"))
     assertFalse(HuggingFaceClient.isCompatibleModelFile("model.task"))
   }
@@ -44,9 +47,12 @@ class HuggingFaceClientTest {
 
     val files =
       listOf(
-        HfModelFile("model-Q4_K_M.gguf", 40),
-        HfModelFile("model-Q8_0.gguf", 80),
+        HfModelFile("model-Q4_K_M.gguf", 400L * 1024L * 1024L),
+        HfModelFile("model-Q8_0.gguf", 800L * 1024L * 1024L),
       )
-    assertEquals(40L to 80L, HuggingFaceClient.downloadableSizeRange(files))
+    assertEquals(
+      400L * 1024L * 1024L to 800L * 1024L * 1024L,
+      HuggingFaceClient.downloadableSizeRange(files),
+    )
   }
 }

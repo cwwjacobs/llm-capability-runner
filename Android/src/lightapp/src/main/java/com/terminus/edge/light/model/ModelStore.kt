@@ -30,6 +30,8 @@ data class ModelDescriptor(
   val visionProjectorSha256: String? = null,
   val sourceRepository: String? = null,
   val sourceRevision: String? = null,
+  val usable: Boolean = true,
+  val cullReason: String? = null,
 )
 
 data class StagedModel(
@@ -74,27 +76,34 @@ class ModelStore(private val context: Context) {
   fun scanStorage(): List<ModelDescriptor> {
     if (!modelDirectory.exists()) return emptyList()
     val active = current()
+    val archiveDirectory = File(modelDirectory, "archive").toPath()
     return modelDirectory
       .walkTopDown()
       .maxDepth(4)
       .filter { file ->
         file.isFile &&
           file.length() > 0L &&
-          isRunnableModelFile(file)
+          !file.toPath().startsWith(archiveDirectory) &&
+          isModelStorageCandidate(file)
       }
       .map { file ->
         active?.takeIf { it.path == file.absolutePath }
           ?: run {
             val gguf = if (file.extension.equals("gguf", true)) GgufMetadataProbe.read(file) else null
+            val cullReason = cullReason(file)
             ModelDescriptor(
               displayName = file.name,
               path = file.absolutePath,
               sha256 = "",
               sizeBytes = file.length(),
               importedAtMs = file.lastModified(),
+              runtimeType =
+                if (file.extension.equals("gguf", true)) ModelRuntimeType.GGUF else ModelRuntimeType.LITERT_LM,
               architecture = gguf?.architecture,
               quantization = gguf?.quantization,
               supportedContextTokens = gguf?.contextTokens,
+              usable = cullReason == null,
+              cullReason = cullReason,
             )
           }
       }
@@ -115,6 +124,10 @@ class ModelStore(private val context: Context) {
     persist: Boolean = true,
   ): ModelDescriptor {
     require(file.isFile && file.length() > 0L) { "Selected file is invalid or empty." }
+    require(isUsablePrimaryModelFile(file)) {
+      cullReason(file)
+        ?: "This file does not look like a runnable GGUF or LiteRT-LM model."
+    }
     
     // Compute SHA-256 lazily upon selection
     val digest = MessageDigest.getInstance("SHA-256")
@@ -212,6 +225,10 @@ class ModelStore(private val context: Context) {
       }
 
       require(tempFile.length() > 0L) { "The selected model is empty." }
+      require(isUsablePrimaryModelFile(tempFile)) {
+        cullReason(tempFile)
+          ?: "Choose a runnable .gguf or .litertlm model file, not an auxiliary artifact."
+      }
       val gguf = if (extension == "gguf") GgufMetadataProbe.read(tempFile) else null
       return StagedModel(
         descriptor =
@@ -261,6 +278,19 @@ class ModelStore(private val context: Context) {
     if (staged.file.name.startsWith("model.importing.")) staged.file.delete()
   }
 
+  fun archive(file: File): File {
+    val source = file.canonicalFile
+    require(source.isFile) { "Model file is no longer present." }
+    require(source.toPath().startsWith(modelDirectory.canonicalFile.toPath())) {
+      "Only app-managed models can be archived here."
+    }
+    val archiveDirectory =
+      File(modelDirectory, "archive/${System.currentTimeMillis()}").apply { mkdirs() }
+    val target = File(archiveDirectory, source.name)
+    moveIntoPlace(source, target)
+    return target
+  }
+
   private fun queryDisplayName(uri: Uri): String? {
     return context.contentResolver
       .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -299,6 +329,29 @@ class ModelStore(private val context: Context) {
   }
 }
 
+private val AUXILIARY_MODEL_NAME =
+  Regex(
+    "(^|[-_.])(mmproj|projector|vision|clip|siglip|encoder|embed|embedding|adapter|lora|tokenizer)([-_.]|$)",
+    RegexOption.IGNORE_CASE,
+  )
+
+internal const val MIN_RUNNABLE_MODEL_BYTES: Long = 128L * 1024L * 1024L
+
+internal fun isModelStorageCandidate(file: File): Boolean =
+  file.extension.equals("gguf", true) || file.extension.equals("litertlm", true)
+
 internal fun isRunnableModelFile(file: File): Boolean =
-  !file.name.startsWith("mmproj", ignoreCase = true) &&
-    (file.extension.equals("gguf", true) || file.extension.equals("litertlm", true))
+  isUsablePrimaryModelFile(file)
+
+internal fun isUsablePrimaryModelFile(file: File): Boolean =
+  isModelStorageCandidate(file) && cullReason(file) == null
+
+internal fun cullReason(file: File): String? =
+  when {
+    !isModelStorageCandidate(file) -> "Not a GGUF or LiteRT-LM model."
+    file.name.startsWith("mmproj", ignoreCase = true) || AUXILIARY_MODEL_NAME.containsMatchIn(file.name) ->
+      "Auxiliary/projector artifact, not a runnable chat model."
+    file.length() < MIN_RUNNABLE_MODEL_BYTES ->
+      "Too small for a runnable local LLM; likely incomplete or auxiliary."
+    else -> null
+  }

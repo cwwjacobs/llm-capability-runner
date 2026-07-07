@@ -45,6 +45,14 @@ import com.terminus.edge.light.context.ContextSettings
 import com.terminus.edge.light.inference.GenerationSettings
 import com.terminus.edge.light.trace.TraceStats
 
+private enum class SettingsPanel {
+  APP,
+  MODELS,
+  WORKSPACE,
+  CONTEXT,
+  GENERATION,
+}
+
 @Composable
 internal fun SettingsDialog(
   themeMode: EdgeThemeMode,
@@ -78,6 +86,7 @@ internal fun SettingsDialog(
   var temperature by remember(settings) { mutableStateOf(settings.temperature.toString()) }
   var imageInputEnabled by remember(settings) { mutableStateOf(settings.imageInputEnabled) }
   var prompt by remember(systemPrompt) { mutableStateOf(systemPrompt) }
+  var expandedPanel by remember { mutableStateOf<SettingsPanel?>(SettingsPanel.MODELS) }
   var contextMode by remember(contextSettings) { mutableStateOf(contextSettings.mode) }
   var contextThreshold by
     remember(contextSettings) {
@@ -118,31 +127,31 @@ internal fun SettingsDialog(
           Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        Text(
-          "App settings",
-          color = MaterialTheme.colorScheme.primary,
-          style = MaterialTheme.typography.titleMedium,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          EdgeThemeMode.entries.forEach { mode ->
-            if (mode == themeMode) {
-              GradientPillButton(
-                text = mode.name.lowercase().replaceFirstChar(Char::uppercase),
-                onClick = {},
-              )
-            } else {
-              OutlinedButton(onClick = { onThemeChange(mode) }) {
-                Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))
+        AccordionMenu(
+          title = "App settings",
+          expanded = expandedPanel == SettingsPanel.APP,
+          onExpandedChange = { expandedPanel = if (it) SettingsPanel.APP else null },
+        ) {
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            EdgeThemeMode.entries.forEach { mode ->
+              if (mode == themeMode) {
+                GradientPillButton(
+                  text = mode.name.lowercase().replaceFirstChar(Char::uppercase),
+                  onClick = {},
+                )
+              } else {
+                OutlinedButton(onClick = { onThemeChange(mode) }) {
+                  Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))
+                }
               }
             }
           }
         }
-        HorizontalDivider()
-        Text(
-          "Models and APIs",
-          color = MaterialTheme.colorScheme.primary,
-          style = MaterialTheme.typography.titleMedium,
-        )
+        AccordionMenu(
+          title = "Models and APIs",
+          expanded = expandedPanel == SettingsPanel.MODELS,
+          onExpandedChange = { expandedPanel = if (it) SettingsPanel.MODELS else null },
+        ) {
         Text(modelLabel, style = MaterialTheme.typography.bodySmall)
         OutlinedButton(
           onClick = onOpenDeviceModels,
@@ -171,13 +180,13 @@ internal fun SettingsDialog(
         ) {
           Text("API providers")
         }
+        }
 
-        HorizontalDivider()
-        Text(
-          "Workspace and access",
-          color = MaterialTheme.colorScheme.primary,
-          style = MaterialTheme.typography.titleMedium,
-        )
+        AccordionMenu(
+          title = "Workspace and access",
+          expanded = expandedPanel == SettingsPanel.WORKSPACE,
+          onExpandedChange = { expandedPanel = if (it) SettingsPanel.WORKSPACE else null },
+        ) {
         OutlinedButton(onClick = onOpenNotes, modifier = Modifier.fillMaxWidth()) {
           Text("Human notes")
         }
@@ -235,13 +244,13 @@ internal fun SettingsDialog(
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           style = MaterialTheme.typography.labelSmall,
         )
+        }
 
-        HorizontalDivider()
-        Text(
-          "Context management",
-          color = MaterialTheme.colorScheme.primary,
-          style = MaterialTheme.typography.titleMedium,
-        )
+        AccordionMenu(
+          title = "Context management",
+          expanded = expandedPanel == SettingsPanel.CONTEXT,
+          onExpandedChange = { expandedPanel = if (it) SettingsPanel.CONTEXT else null },
+        ) {
         Text(
           "The meter uses exact characters and an estimated four characters per token.",
           style = MaterialTheme.typography.bodySmall,
@@ -269,13 +278,13 @@ internal fun SettingsDialog(
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           style = MaterialTheme.typography.labelSmall,
         )
+        }
 
-        HorizontalDivider()
-        Text(
-          "Customize model settings",
-          color = MaterialTheme.colorScheme.primary,
-          style = MaterialTheme.typography.titleMedium,
-        )
+        AccordionMenu(
+          title = "Customize model settings",
+          expanded = expandedPanel == SettingsPanel.GENERATION,
+          onExpandedChange = { expandedPanel = if (it) SettingsPanel.GENERATION else null },
+        ) {
         Text(
           "Changes reload the current model and begin a fresh conversation.",
           style = MaterialTheme.typography.bodySmall,
@@ -318,6 +327,7 @@ internal fun SettingsDialog(
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
           )
+        }
         }
       }
     },

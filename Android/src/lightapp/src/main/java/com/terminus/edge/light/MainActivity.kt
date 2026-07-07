@@ -209,6 +209,16 @@ private fun EdgeLightScreen(controller: EdgeController) {
             onArchive = controller::archiveRuntimeSpine,
           )
         WorkspaceDestination.CHAT -> {
+          MainModelBar(
+            modelLabel = controller.activeInferenceLabel,
+            ready = controller.inferenceReady,
+            isBusy = controller.isBusy,
+            onOpenModels = {
+              showDeviceModels = true
+              scope.launch { controller.scanModels() }
+            },
+            onBrowseHuggingFace = { showModelDownloader = true },
+          )
           ChatPanel(
             messages = controller.messages,
             compressedMessageIds = contextSnapshot.compressedEntryIds.toSet(),
@@ -490,6 +500,8 @@ private fun EdgeLightScreen(controller: EdgeController) {
           if (!controller.isBusy) showDeviceModels = false
         }
       },
+      onArchive = { file -> scope.launch { controller.archiveScannedModel(file) } },
+      onArchiveStale = { scope.launch { controller.archiveStaleModels() } },
     )
   }
 
@@ -676,6 +688,52 @@ private fun ComposerControlStrip(
       enabled = enabled,
       contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp),
     )
+  }
+}
+
+@Composable
+private fun MainModelBar(
+  modelLabel: String,
+  ready: Boolean,
+  isBusy: Boolean,
+  onOpenModels: () -> Unit,
+  onBrowseHuggingFace: () -> Unit,
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    border = edgeLightBorder(),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          if (ready) "Model loaded" else "Model required",
+          color = if (ready) EdgeLightPalette.Cyan else MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+          modelLabel,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          fontWeight = FontWeight.SemiBold,
+          style = MaterialTheme.typography.bodyMedium,
+        )
+      }
+      OutlinedButton(onClick = onOpenModels, enabled = !isBusy) {
+        Text("Models")
+      }
+      GradientPillButton(
+        text = "HF",
+        onClick = onBrowseHuggingFace,
+        enabled = !isBusy,
+        contentPadding = PaddingValues(horizontal = 13.dp, vertical = 9.dp),
+      )
+    }
   }
 }
 

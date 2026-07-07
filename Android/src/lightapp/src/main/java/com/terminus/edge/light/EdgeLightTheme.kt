@@ -36,9 +36,9 @@ enum class EdgeThemeMode(val wireValue: String) {
 
 object EdgeLightPalette {
   val ShellBlack = Color(0xFF0B0910)
-  val ChatBlack = Color(0xFF08070C)
-  val SurfaceBlack = Color(0xFF17121D)
-  val RaisedBlack = Color(0xFF211829)
+  val ChatBlack = Color(0xFF07060A)
+  val SurfaceBlack = Color(0xFF121016)
+  val RaisedBlack = Color(0xFF17121D)
   val HotPink = Color(0xFFFF3EB5)
   val Purple = Color(0xFF6D36FF)
   val DeepPurple = Color(0xFF4B2396)
@@ -73,23 +73,23 @@ private val DefaultColors =
 
 private val DarkColors =
   darkColorScheme(
-    primary = Color(0xFFAEC6FF),
-    onPrimary = Color(0xFF112F60),
-    primaryContainer = Color(0xFF294777),
-    onPrimaryContainer = Color(0xFFD8E2FF),
-    secondary = Color(0xFFBEC6DC),
-    onSecondary = Color(0xFF283141),
-    secondaryContainer = Color(0xFF3E4759),
-    onSecondaryContainer = Color(0xFFDAE2F9),
-    background = Color(0xFF111318),
-    onBackground = Color(0xFFE2E2E9),
-    surface = Color(0xFF111318),
-    onSurface = Color(0xFFE2E2E9),
-    surfaceVariant = Color(0xFF44464F),
-    onSurfaceVariant = Color(0xFFC5C6D0),
-    outline = Color(0xFF8E9099),
-    error = Color(0xFFFFB4AB),
-    errorContainer = Color(0xFF93000A),
+    primary = EdgeLightPalette.HotPink,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF281124),
+    onPrimaryContainer = Color(0xFFFFD6F0),
+    secondary = EdgeLightPalette.Cyan,
+    onSecondary = Color(0xFF082D33),
+    secondaryContainer = Color(0xFF0F2A31),
+    onSecondaryContainer = Color(0xFFBFF7FF),
+    background = EdgeLightPalette.ShellBlack,
+    onBackground = Color(0xFFF0EDF4),
+    surface = EdgeLightPalette.SurfaceBlack,
+    onSurface = Color(0xFFF0EDF4),
+    surfaceVariant = EdgeLightPalette.RaisedBlack,
+    onSurfaceVariant = Color(0xFFB9B1C0),
+    outline = EdgeLightPalette.Gold.copy(alpha = 0.56f),
+    error = Color(0xFFFF9AA2),
+    errorContainer = Color(0xFF3B1118),
     onErrorContainer = Color(0xFFFFDAD6),
   )
 

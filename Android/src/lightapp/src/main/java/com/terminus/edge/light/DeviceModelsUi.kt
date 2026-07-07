@@ -36,7 +36,10 @@ internal fun DeviceModelsDialog(
   onRefresh: () -> Unit,
   onImport: () -> Unit,
   onSelect: (File) -> Unit,
+  onArchive: (File) -> Unit,
+  onArchiveStale: () -> Unit,
 ) {
+  val staleCount = models.count { !it.usable && it.path != activeModelPath }
   AlertDialog(
     onDismissRequest = { if (!isBusy) onDismiss() },
     title = { Text("Models on this device") },
@@ -46,14 +49,14 @@ internal fun DeviceModelsDialog(
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         Text(
-          "App-managed GGUF and LiteRT-LM files are shown here. External files appear after Import; every selection is validated before it replaces the active model.",
+          "App-managed GGUF and LiteRT-LM files are shown here. Tiny, projector, adapter, and incomplete artifacts are marked stale and can be archived without deleting them.",
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           style = MaterialTheme.typography.bodySmall,
         )
         if (isBusy && models.isEmpty()) {
           CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
         } else if (models.isEmpty()) {
-          Text("No usable app-managed models found.")
+          Text("No app-managed model files found.")
         } else {
           LazyColumn(
             modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
@@ -61,6 +64,7 @@ internal fun DeviceModelsDialog(
           ) {
             items(models, key = ModelDescriptor::path) { model ->
               val active = model.path == activeModelPath
+              val usable = model.usable
               Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
@@ -69,6 +73,8 @@ internal fun DeviceModelsDialog(
                     containerColor =
                       if (active) {
                         MaterialTheme.colorScheme.primaryContainer
+                      } else if (!usable) {
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.44f)
                       } else {
                         MaterialTheme.colorScheme.surfaceVariant
                       }
@@ -96,6 +102,12 @@ internal fun DeviceModelsDialog(
                         color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelSmall,
                       )
+                    } else if (!usable) {
+                      Text(
+                        "Stale",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                      )
                     }
                   }
                   Text(
@@ -111,13 +123,32 @@ internal fun DeviceModelsDialog(
                     formatDeviceModelBytes(model.sizeBytes),
                     style = MaterialTheme.typography.bodySmall,
                   )
+                  if (!usable) {
+                    Text(
+                      model.cullReason ?: "Not offered as a runnable chat model.",
+                      color = MaterialTheme.colorScheme.error,
+                      style = MaterialTheme.typography.labelSmall,
+                    )
+                  }
                   if (!active) {
-                    OutlinedButton(
-                      onClick = { onSelect(File(model.path)) },
-                      enabled = !isBusy,
+                    Row(
                       modifier = Modifier.align(Alignment.End),
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                      Text("Use model")
+                      if (usable) {
+                        OutlinedButton(
+                          onClick = { onSelect(File(model.path)) },
+                          enabled = !isBusy,
+                        ) {
+                          Text("Use model")
+                        }
+                      }
+                      TextButton(
+                        onClick = { onArchive(File(model.path)) },
+                        enabled = !isBusy,
+                      ) {
+                        Text("Archive")
+                      }
                     }
                   }
                 }
@@ -131,6 +162,9 @@ internal fun DeviceModelsDialog(
         ) {
           TextButton(onClick = onRefresh, enabled = !isBusy) { Text("Refresh") }
           TextButton(onClick = onImport, enabled = !isBusy) { Text("Import") }
+          TextButton(onClick = onArchiveStale, enabled = !isBusy && staleCount > 0) {
+            Text("Archive stale")
+          }
         }
       }
     },

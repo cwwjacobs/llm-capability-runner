@@ -36,14 +36,25 @@ data class HfModelFile(
   val path: String,
   val sizeBytes: Long?,
 ) {
+  private val fileName: String
+    get() = path.substringAfterLast('/')
+
   val isProjector: Boolean
-    get() = path.substringAfterLast('/').startsWith("mmproj", ignoreCase = true)
+    get() =
+      fileName.startsWith("mmproj", ignoreCase = true) ||
+        fileName.contains("projector", ignoreCase = true)
 
   val isSplitShard: Boolean
     get() = SPLIT_GGUF.containsMatchIn(path)
 
+  val isAuxiliaryArtifact: Boolean
+    get() = isProjector || AUXILIARY_ARTIFACT.containsMatchIn(fileName)
+
   val isPrimaryChoice: Boolean
-    get() = !isProjector && (!isSplitShard || path.contains("-00001-of-", ignoreCase = true))
+    get() =
+      !isAuxiliaryArtifact &&
+        (sizeBytes == null || sizeBytes >= MIN_RUNNABLE_MODEL_BYTES) &&
+        (!isSplitShard || path.contains("-00001-of-", ignoreCase = true))
 
   val isHardwareSpecific: Boolean
     get() =
@@ -52,6 +63,11 @@ data class HfModelFile(
   private companion object {
     val HARDWARE_SUFFIXES = listOf("_sm", "_mt", "tensor_g")
     val SPLIT_GGUF = Regex("-\\d{5}-of-\\d{5}\\.gguf$", RegexOption.IGNORE_CASE)
+    val AUXILIARY_ARTIFACT =
+      Regex(
+        "(^|[-_.])(vision|clip|siglip|encoder|embed|embedding|adapter|lora|tokenizer)([-_.]|$)",
+        RegexOption.IGNORE_CASE,
+      )
   }
 }
 
@@ -88,25 +104,28 @@ object HuggingFaceClient {
       if (models.isEmpty() && firstFailure != null) {
         HfResult.Failure(firstFailure!!)
       } else {
-        val ranked = models.values.sortedByDescending(HfModelInfo::downloads).take(12)
+        val ranked = models.values.sortedByDescending(HfModelInfo::downloads).take(18)
         val enriched =
           coroutineScope {
             ranked
               .map { model ->
                 async {
-                  val sizeRange =
-                    when (val files = listModelFiles(model.id, token)) {
-                      is HfResult.Success -> downloadableSizeRange(files.value)
-                      is HfResult.Failure -> null
+                  when (val files = listModelFiles(model.id, token)) {
+                    is HfResult.Failure -> null
+                    is HfResult.Success -> {
+                      val sizeRange = downloadableSizeRange(files.value) ?: return@async null
+                      model.copy(
+                        parameterLabel = parameterLabel(model.id),
+                        minimumDownloadBytes = sizeRange.first,
+                        maximumDownloadBytes = sizeRange.second,
+                      )
                     }
-                  model.copy(
-                    parameterLabel = parameterLabel(model.id),
-                    minimumDownloadBytes = sizeRange?.first,
-                    maximumDownloadBytes = sizeRange?.second,
-                  )
+                  }
                 }
               }
               .awaitAll()
+              .filterNotNull()
+              .take(12)
           }
         HfResult.Success(enriched)
       }
@@ -148,8 +167,8 @@ object HuggingFaceClient {
             }
             .fold(
               onSuccess = { files ->
-                if (files.isEmpty()) {
-                  HfResult.Failure("This repository has no runnable .gguf or .litertlm model files.")
+                if (files.none(HfModelFile::isPrimaryChoice)) {
+                  HfResult.Failure("This repository has no runnable primary GGUF or LiteRT-LM model builds.")
                 } else {
                   HfResult.Success(files)
                 }

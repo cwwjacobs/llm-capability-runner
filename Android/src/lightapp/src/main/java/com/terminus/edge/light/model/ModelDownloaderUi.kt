@@ -63,8 +63,6 @@ fun ModelDownloaderDialog(
   var query by remember { mutableStateOf("gemma") }
   var models by remember { mutableStateOf<List<HfModelInfo>>(emptyList()) }
   var selectedRepoId by remember { mutableStateOf<String?>(null) }
-  var expandedRepoId by remember { mutableStateOf<String?>(null) }
-  var expandedFilePath by remember { mutableStateOf<String?>(null) }
   var modelFiles by remember { mutableStateOf<List<HfModelFile>>(emptyList()) }
   var isSearching by remember { mutableStateOf(false) }
   var isLoadingFiles by remember { mutableStateOf(false) }
@@ -159,7 +157,6 @@ fun ModelDownloaderDialog(
                     .map(HfModelFile::sizeBytes)
                     .takeIf { sizes -> sizes.all { it != null } }
                     ?.sumOf { it ?: 0L }
-                val fileExpanded = expandedFilePath == modelFile.path
                 Card(
                   colors =
                     CardDefaults.cardColors(
@@ -187,25 +184,11 @@ fun ModelDownloaderDialog(
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                       style = MaterialTheme.typography.labelSmall,
                     )
-                    if (fileExpanded) {
-                      Text(
-                        modelFile.path,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                      )
-                      Text(
-                        if (modelFile.isHardwareSpecific) "Hardware-specific build" else "General build",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
-                      )
-                    }
-                    TextButton(
-                      onClick = {
-                        expandedFilePath = if (fileExpanded) null else modelFile.path
-                      }
-                    ) {
-                      Text(if (fileExpanded) "Less" else "Full name")
-                    }
+                    Text(
+                      if (modelFile.isHardwareSpecific) "Hardware-specific build" else "General build",
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      style = MaterialTheme.typography.labelSmall,
+                    )
                     Button(
                       onClick = {
                         val repoId = selectedRepoId ?: return@Button
@@ -321,7 +304,6 @@ fun ModelDownloaderDialog(
               verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
               items(models, key = HfModelInfo::id) { model ->
-                val expanded = expandedRepoId == model.id
                 Card(
                   modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -336,8 +318,8 @@ fun ModelDownloaderDialog(
                       fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                      model.id,
-                      maxLines = if (expanded) 4 else 1,
+                      "Slug  ${model.id}",
+                      maxLines = 1,
                       overflow = TextOverflow.Ellipsis,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                       style = MaterialTheme.typography.bodySmall,
@@ -355,28 +337,15 @@ fun ModelDownloaderDialog(
                         style = MaterialTheme.typography.labelSmall,
                       )
                     }
-                    if (expanded) {
-                      Text(
-                        "${model.downloads} downloads · GGUF or LiteRT-LM builds",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
-                      )
-                    }
                     Row(
                       modifier = Modifier.fillMaxWidth(),
-                      horizontalArrangement = Arrangement.SpaceBetween,
+                      horizontalArrangement = Arrangement.End,
                       verticalAlignment = Alignment.CenterVertically,
                     ) {
-                      TextButton(
-                        onClick = { expandedRepoId = if (expanded) null else model.id }
-                      ) {
-                        Text(if (expanded) "Less" else "Details")
-                      }
                       Button(
                         onClick = {
                           selectedRepoId = model.id
                           modelFiles = emptyList()
-                          expandedFilePath = null
                           isLoadingFiles = true
                           errorMessage = null
                           scope.launch {

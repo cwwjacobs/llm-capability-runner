@@ -34,9 +34,20 @@ fun AccordionMenu(
   title: String,
   modifier: Modifier = Modifier,
   initiallyExpanded: Boolean = false,
+  expanded: Boolean? = null,
+  onExpandedChange: ((Boolean) -> Unit)? = null,
   content: @Composable ColumnScope.() -> Unit
 ) {
-  var expanded by remember { mutableStateOf(initiallyExpanded) }
+  var internalExpanded by remember { mutableStateOf(initiallyExpanded) }
+  val isExpanded = expanded ?: internalExpanded
+  fun toggle() {
+    val next = !isExpanded
+    if (onExpandedChange != null) {
+      onExpandedChange(next)
+    } else {
+      internalExpanded = next
+    }
+  }
 
   Column(
     modifier = modifier
@@ -48,7 +59,7 @@ fun AccordionMenu(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .clickable { expanded = !expanded }
+        .clickable { toggle() }
         .padding(16.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
@@ -60,13 +71,13 @@ fun AccordionMenu(
         modifier = Modifier.weight(1f)
       )
       Icon(
-        imageVector = if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-        contentDescription = if (expanded) "Collapse" else "Expand",
+        imageVector = if (isExpanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+        contentDescription = if (isExpanded) "Collapse" else "Expand",
         tint = EdgeLightPalette.DeepPurple
       )
     }
 
-    AnimatedVisibility(visible = expanded) {
+    AnimatedVisibility(visible = isExpanded) {
       Column(
         modifier = Modifier
           .fillMaxWidth()

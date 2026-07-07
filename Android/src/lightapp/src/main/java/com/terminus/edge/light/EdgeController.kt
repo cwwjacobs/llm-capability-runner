@@ -287,6 +287,58 @@ class EdgeController(private val context: Context) : AutoCloseable {
     }
   }
 
+  suspend fun archiveScannedModel(file: File) {
+    check(!isBusy) { "Wait for the current operation to finish." }
+    if (file.absolutePath == model?.path) {
+      status = "Switch to another model before archiving the active model."
+      return
+    }
+    isBusy = true
+    status = "Archiving ${file.name}..."
+    try {
+      val archived = withContext(Dispatchers.IO) { modelStore.archive(file) }
+      val found = withContext(Dispatchers.IO) { modelStore.scanStorage() }
+      scannedModels = found
+      status = "Model archived locally as ${archived.parentFile?.name}/${archived.name}."
+    } catch (error: Throwable) {
+      status = error.message ?: "Model could not be archived."
+    } finally {
+      isBusy = false
+    }
+  }
+
+  suspend fun archiveStaleModels() {
+    check(!isBusy) { "Wait for the current operation to finish." }
+    val activePath = model?.path
+    val stale =
+      scannedModels
+        .filter { !it.usable && it.path != activePath }
+        .map { File(it.path) }
+    if (stale.isEmpty()) {
+      status = "No stale model candidates to archive."
+      return
+    }
+    isBusy = true
+    status = "Archiving ${stale.size} stale model${if (stale.size == 1) "" else "s"}..."
+    try {
+      val archivedCount =
+        withContext(Dispatchers.IO) {
+          stale.count { file ->
+            runCatching {
+                modelStore.archive(file)
+              }
+              .isSuccess
+          }
+        }
+      scannedModels = withContext(Dispatchers.IO) { modelStore.scanStorage() }
+      status = "Archived $archivedCount stale model${if (archivedCount == 1) "" else "s"} locally."
+    } catch (error: Throwable) {
+      status = error.message ?: "Stale models could not be archived."
+    } finally {
+      isBusy = false
+    }
+  }
+
   suspend fun selectDownloadedModel(downloaded: DownloadedModel) {
     check(!isBusy) { "Wait for the current operation to finish." }
     isBusy = true
